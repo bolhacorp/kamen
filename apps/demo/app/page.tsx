@@ -1,5 +1,7 @@
+import { getConfig } from "./api/secrets";
 import { LiveAvatarDemo } from "../src/components/LiveAvatarDemo";
 
 export default function Home() {
-  return <LiveAvatarDemo />;
+  const config = getConfig();
+  return <LiveAvatarDemo apiUrl={config.API_URL} />;
 }

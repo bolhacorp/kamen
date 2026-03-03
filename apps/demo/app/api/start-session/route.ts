@@ -1,19 +1,29 @@
 import { NextRequest } from "next/server";
-import {
-  API_KEY,
-  API_URL,
-  AVATAR_ID,
-  VOICE_ID,
-  CONTEXT_ID,
-  LANGUAGE,
-  IS_SANDBOX,
-} from "../secrets";
+import { getConfig } from "../secrets";
 
 interface StartFullModeSessionRequestBody {
   pushToTalk?: boolean;
 }
 
 export async function POST(request: NextRequest) {
+  const config = getConfig();
+  const apiKey = (config.API_KEY ?? "").trim();
+  const avatarId = (config.AVATAR_ID ?? "").trim();
+  const voiceId = (config.VOICE_ID ?? "").trim();
+  const contextId = (config.CONTEXT_ID ?? "").trim();
+  const language = (config.LANGUAGE ?? "").trim() || "en";
+
+  if (!voiceId || !contextId) {
+    return new Response(
+      JSON.stringify({
+        error:
+          "FULL mode requires Voice ID and Context ID. Set them in Settings (/config) under “FULL mode (voice & context)”. " +
+          `(Server read: voice_id length ${voiceId.length}, context_id length ${contextId.length}. If you set them, re-save in Settings.)`,
+      }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
   let session_token = "";
   let session_id = "";
   try {
@@ -21,22 +31,22 @@ export async function POST(request: NextRequest) {
       .json()
       .catch(() => ({}));
     const pushToTalk = body.pushToTalk === true;
-    const res = await fetch(`${API_URL}/v1/sessions/token`, {
+    const res = await fetch(`${config.API_URL}/v1/sessions/token`, {
       method: "POST",
       headers: {
-        "X-API-KEY": API_KEY,
+        "X-API-KEY": apiKey,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         mode: "FULL",
-        avatar_id: AVATAR_ID,
+        avatar_id: avatarId,
         avatar_persona: {
-          voice_id: VOICE_ID,
-          context_id: CONTEXT_ID,
-          language: LANGUAGE,
+          voice_id: voiceId,
+          context_id: contextId,
+          language,
         },
         ...(pushToTalk && { interactivity_type: "PUSH_TO_TALK" }),
-        is_sandbox: IS_SANDBOX,
+        is_sandbox: config.IS_SANDBOX,
       }),
     });
 

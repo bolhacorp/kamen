@@ -119,8 +119,6 @@ body {
 }
 
 .start-conversation-button {
-  position: fixed;
-  bottom: 80px;
   padding: var(--button-padding-y) var(--button-padding-x);
   border-radius: var(--button-border-radius);
   font-size: var(--button-font-size);

@@ -8,7 +8,7 @@ import { SessionInteractivityMode } from "@heygen/liveavatar-web-sdk";
 
 export type SessionMode = "FULL" | "FULL_PTT" | "LITE";
 
-export const LiveAvatarDemo = () => {
+export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
   const [sessionToken, setSessionToken] = useState("");
   const [mode, setMode] = useState<SessionMode>("FULL");
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +125,7 @@ export const LiveAvatarDemo = () => {
       ) : (
         <div className="conversation-transition">
           <LiveAvatarSession
+            apiUrl={apiUrl}
             mode={mode}
             sessionAccessToken={sessionToken}
             voiceChatConfig={voiceChatConfig}

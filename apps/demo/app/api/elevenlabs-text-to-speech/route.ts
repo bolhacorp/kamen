@@ -1,6 +1,7 @@
-import { ELEVENLABS_API_KEY } from "../secrets";
+import { getConfig } from "../secrets";
 
 export async function POST(request: Request) {
+  const config = getConfig();
   try {
     const body = await request.json();
     const { text, voice_id = "21m00Tcm4TlvDq8ikWAM" } = body;
@@ -14,7 +15,19 @@ export async function POST(request: Request) {
       });
     }
 
-    if (!ELEVENLABS_API_KEY) {
+    if (!config.USE_ELEVENLABS_FOR_LITE) {
+      return new Response(
+        JSON.stringify({
+          error:
+            "ElevenLabs is not enabled for LITE. Enable it in Settings (/config).",
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+    if (!config.ELEVENLABS_API_KEY) {
       return new Response(
         JSON.stringify({ error: "ElevenLabs API key not configured" }),
         {
@@ -33,7 +46,7 @@ export async function POST(request: Request) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "xi-api-key": ELEVENLABS_API_KEY,
+          "xi-api-key": config.ELEVENLABS_API_KEY,
         },
         body: JSON.stringify({
           text,

@@ -1,42 +1,37 @@
-import { API_KEY, API_URL, AVATAR_ID, IS_SANDBOX } from "../secrets";
+import { getConfig } from "../secrets";
 
 export async function POST() {
+  const config = getConfig();
   let session_token = "";
   let session_id = "";
   try {
-    const res = await fetch(`${API_URL}/v1/sessions/token`, {
+    const apiKey = config.API_KEY.trim();
+    const avatarId = config.AVATAR_ID.trim();
+    const res = await fetch(`${config.API_URL}/v1/sessions/token`, {
       method: "POST",
       headers: {
-        "X-API-KEY": API_KEY,
+        "X-API-KEY": apiKey,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         mode: "LITE",
-        avatar_id: AVATAR_ID,
-        is_sandbox: IS_SANDBOX,
+        avatar_id: avatarId,
+        is_sandbox: config.IS_SANDBOX,
       }),
     });
     if (!res.ok) {
-      const error = await res.json();
-      if (error.error) {
-        const resp = await res.json();
-        const errorMessage =
-          resp.data[0].message ?? "Failed to retrieve session token";
-        return new Response(JSON.stringify({ error: errorMessage }), {
-          status: res.status,
-        });
-      }
-
-      return new Response(
-        JSON.stringify({ error: "Failed to retrieve session token" }),
-        {
-          status: res.status,
-        },
-      );
+      const errBody = await res.json().catch(() => ({}));
+      const errorMessage =
+        errBody?.data?.[0]?.message ??
+        errBody?.error ??
+        errBody?.message ??
+        "Failed to retrieve session token";
+      return new Response(JSON.stringify({ error: errorMessage }), {
+        status: res.status,
+        headers: { "Content-Type": "application/json" },
+      });
     }
     const data = await res.json();
-    console.log(data);
-
     session_token = data.data.session_token;
     session_id = data.data.session_id;
   } catch (error: unknown) {

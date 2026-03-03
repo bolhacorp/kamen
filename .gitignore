@@ -35,6 +35,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Local run script state
+.run-setup-done
+
+# Local config (tokens, keys) - never commit
+apps/demo/config.local.json
+config.local.json
+
 # Misc
 .DS_Store
 *.pem

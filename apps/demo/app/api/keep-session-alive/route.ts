@@ -1,6 +1,7 @@
-import { API_URL } from "../secrets";
+import { getConfig } from "../secrets";
 
 export async function POST(request: Request) {
+  const config = getConfig();
   try {
     const body = await request.json();
     const { session_token } = body;
@@ -17,7 +18,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const res = await fetch(`${API_URL}/v1/sessions/keep-alive`, {
+    const res = await fetch(`${config.API_URL}/v1/sessions/keep-alive`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${session_token}`,

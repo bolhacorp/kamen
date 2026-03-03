@@ -28,6 +28,9 @@ yarn-error.log*
 # env files (can opt-in for commiting if needed)
 .env*
 
+# Local config (tokens, keys) - never commit
+config.local.json
+
 # vercel
 .vercel
 

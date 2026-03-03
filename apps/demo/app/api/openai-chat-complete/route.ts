@@ -1,9 +1,10 @@
-import { OPENAI_API_KEY } from "../secrets";
+import { getConfig } from "../secrets";
 
 const SYSTEM_PROMPT =
   "You are a helpful assistant. You are being used in a demo. Please act courteously and helpfully.";
 
 export async function POST(request: Request) {
+  const config = getConfig();
   try {
     const body = await request.json();
     const {
@@ -21,7 +22,19 @@ export async function POST(request: Request) {
       });
     }
 
-    if (!OPENAI_API_KEY) {
+    if (!config.USE_OPENAI_FOR_LITE) {
+      return new Response(
+        JSON.stringify({
+          error:
+            "OpenAI is not enabled for LITE. Enable it in Settings (/config).",
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+    if (!config.OPENAI_API_KEY) {
       return new Response(
         JSON.stringify({ error: "OpenAI API key not configured" }),
         {
@@ -38,7 +51,7 @@ export async function POST(request: Request) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${config.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
         model,

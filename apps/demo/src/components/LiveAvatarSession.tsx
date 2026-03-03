@@ -13,7 +13,6 @@ import { Header } from "./Header";
 import { Loading } from "./Loading";
 import type { SessionMode } from "./LiveAvatarDemo";
 
-
 const Button: React.FC<{
   onClick: () => void;
   disabled?: boolean;
@@ -92,9 +91,7 @@ const LiveAvatarSessionComponent: React.FC<{
       <p>Voice Chat Active: {isActive ? "true" : "false"}</p>
       <p>Voice Chat Loading: {isLoading ? "true" : "false"}</p>
       {voiceChatError && (
-        <p className="text-red-500">
-          Voice Chat Error: {voiceChatError}
-        </p>
+        <p className="text-red-500">Voice Chat Error: {voiceChatError}</p>
       )}
       {isActive && <p>Muted: {isMuted ? "true" : "false"}</p>}
       <Button
@@ -232,11 +229,13 @@ const LiveAvatarSessionComponent: React.FC<{
 };
 
 export const LiveAvatarSession: React.FC<{
+  apiUrl: string;
   mode: SessionMode;
   sessionAccessToken: string;
   onSessionStopped: () => void;
   voiceChatConfig?: boolean | VoiceChatConfig;
 }> = ({
+  apiUrl,
   mode,
   sessionAccessToken,
   onSessionStopped,
@@ -244,6 +243,7 @@ export const LiveAvatarSession: React.FC<{
 }) => {
   return (
     <LiveAvatarContextProvider
+      apiUrl={apiUrl}
       sessionAccessToken={sessionAccessToken}
       voiceChatConfig={voiceChatConfig}
     >
