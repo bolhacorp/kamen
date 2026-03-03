@@ -22,16 +22,26 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     );
   }
-  let body: { OPENAI_API_KEY?: string; secret_name?: string };
+  let body: {
+    OPENAI_API_KEY?: string;
+    OPENAI_REALTIME_API_KEY?: string;
+    secret_name?: string;
+  };
   try {
     body = await request.json();
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  const openaiKey = (body.OPENAI_API_KEY ?? "").trim();
+  const openaiKey = (
+    body.OPENAI_REALTIME_API_KEY ??
+    body.OPENAI_API_KEY ??
+    ""
+  ).trim();
   if (!openaiKey) {
     return Response.json(
-      { error: "OPENAI_API_KEY is required in body" },
+      {
+        error: "OPENAI_API_KEY or OPENAI_REALTIME_API_KEY is required in body",
+      },
       { status: 400 },
     );
   }

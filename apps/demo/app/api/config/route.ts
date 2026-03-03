@@ -13,12 +13,17 @@ function validateBody(body: unknown): body is Config {
   if (typeof o.VOICE_ID !== "string") return false;
   if (typeof o.CONTEXT_ID !== "string") return false;
   if (typeof o.LANGUAGE !== "string") return false;
+  if (typeof o.USE_FULL_MODE !== "boolean") return false;
+  if (typeof o.USE_PUSH_TO_TALK_FOR_FULL !== "boolean") return false;
   if (typeof o.ELEVENLABS_API_KEY !== "string") return false;
   if (typeof o.OPENAI_API_KEY !== "string") return false;
   if (typeof o.USE_ELEVENLABS_FOR_LITE !== "boolean") return false;
   if (typeof o.USE_OPENAI_FOR_LITE !== "boolean") return false;
   if (typeof o.USE_OPENAI_REALTIME_FOR_LITE !== "boolean") return false;
+  if (typeof o.USE_TRUE_LITE !== "boolean") return false;
+  if (typeof o.OPENAI_REALTIME_API_KEY !== "string") return false;
   if (typeof o.OPENAI_REALTIME_SECRET_ID !== "string") return false;
+  if (typeof o.OPENAI_REALTIME_PROMPT_ID !== "string") return false;
   if (typeof o.OPENAI_REALTIME_MODEL !== "string") return false;
   if (typeof o.OPENAI_REALTIME_VOICE !== "string") return false;
   if (typeof o.OPENAI_REALTIME_TEMPERATURE !== "number") return false;

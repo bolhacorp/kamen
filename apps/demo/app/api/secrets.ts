@@ -10,12 +10,17 @@ const DEFAULTS = {
   VOICE_ID: "",
   CONTEXT_ID: "",
   LANGUAGE: "pt",
+  USE_FULL_MODE: true,
+  USE_PUSH_TO_TALK_FOR_FULL: false,
   ELEVENLABS_API_KEY: "",
   OPENAI_API_KEY: "",
   USE_ELEVENLABS_FOR_LITE: false,
   USE_OPENAI_FOR_LITE: false,
   USE_OPENAI_REALTIME_FOR_LITE: false,
+  USE_TRUE_LITE: false,
+  OPENAI_REALTIME_API_KEY: "",
   OPENAI_REALTIME_SECRET_ID: "",
+  OPENAI_REALTIME_PROMPT_ID: "",
   OPENAI_REALTIME_MODEL: "gpt-realtime",
   OPENAI_REALTIME_VOICE: "marin",
   OPENAI_REALTIME_TEMPERATURE: 0.8,
@@ -30,12 +35,17 @@ export type Config = {
   VOICE_ID: string;
   CONTEXT_ID: string;
   LANGUAGE: string;
+  USE_FULL_MODE: boolean;
+  USE_PUSH_TO_TALK_FOR_FULL: boolean;
   ELEVENLABS_API_KEY: string;
   OPENAI_API_KEY: string;
   USE_ELEVENLABS_FOR_LITE: boolean;
   USE_OPENAI_FOR_LITE: boolean;
   USE_OPENAI_REALTIME_FOR_LITE: boolean;
+  USE_TRUE_LITE: boolean;
+  OPENAI_REALTIME_API_KEY: string;
   OPENAI_REALTIME_SECRET_ID: string;
+  OPENAI_REALTIME_PROMPT_ID: string;
   OPENAI_REALTIME_MODEL: string;
   OPENAI_REALTIME_VOICE: string;
   OPENAI_REALTIME_TEMPERATURE: number;
@@ -91,6 +101,11 @@ export function getConfig(): Config {
     fromEnv.USE_OPENAI_REALTIME_FOR_LITE =
       process.env.USE_OPENAI_REALTIME_FOR_LITE === "true" ||
       process.env.USE_OPENAI_REALTIME_FOR_LITE === "1";
+  if (process.env.USE_TRUE_LITE != null)
+    fromEnv.USE_TRUE_LITE =
+      process.env.USE_TRUE_LITE === "true" || process.env.USE_TRUE_LITE === "1";
+  if (process.env.OPENAI_REALTIME_PROMPT_ID != null)
+    fromEnv.OPENAI_REALTIME_PROMPT_ID = process.env.OPENAI_REALTIME_PROMPT_ID;
 
   const configPath = getConfigPath();
   let fromFile: Partial<Config> = {};
@@ -106,6 +121,13 @@ export function getConfig(): Config {
         fromFile.CONTEXT_ID = String(anyFile.context_id);
       if (anyFile.avatar_id !== undefined && fromFile.AVATAR_ID === undefined)
         fromFile.AVATAR_ID = String(anyFile.avatar_id);
+      if (
+        anyFile.openai_realtime_api_key !== undefined &&
+        fromFile.OPENAI_REALTIME_API_KEY === undefined
+      )
+        fromFile.OPENAI_REALTIME_API_KEY = String(
+          anyFile.openai_realtime_api_key,
+        );
       if (
         anyFile.openai_realtime_secret_id !== undefined &&
         fromFile.OPENAI_REALTIME_SECRET_ID === undefined
@@ -143,6 +165,30 @@ export function getConfig(): Config {
       )
         fromFile.USE_OPENAI_REALTIME_FOR_LITE = Boolean(
           anyFile.use_openai_realtime_for_lite,
+        );
+      if (
+        anyFile.use_true_lite !== undefined &&
+        fromFile.USE_TRUE_LITE === undefined
+      )
+        fromFile.USE_TRUE_LITE = Boolean(anyFile.use_true_lite);
+      if (
+        anyFile.openai_realtime_prompt_id !== undefined &&
+        fromFile.OPENAI_REALTIME_PROMPT_ID === undefined
+      )
+        fromFile.OPENAI_REALTIME_PROMPT_ID = String(
+          anyFile.openai_realtime_prompt_id,
+        );
+      if (
+        anyFile.use_full_mode !== undefined &&
+        fromFile.USE_FULL_MODE === undefined
+      )
+        fromFile.USE_FULL_MODE = Boolean(anyFile.use_full_mode);
+      if (
+        anyFile.use_push_to_talk_for_full !== undefined &&
+        fromFile.USE_PUSH_TO_TALK_FOR_FULL === undefined
+      )
+        fromFile.USE_PUSH_TO_TALK_FOR_FULL = Boolean(
+          anyFile.use_push_to_talk_for_full,
         );
     }
   } catch {

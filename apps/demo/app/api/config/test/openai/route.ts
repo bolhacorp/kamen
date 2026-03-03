@@ -2,10 +2,16 @@ import { NextRequest } from "next/server";
 import { getConfig } from "../../../secrets";
 
 export async function POST(request: NextRequest) {
-  let apiKey = getConfig().OPENAI_API_KEY;
+  const c = getConfig();
+  let apiKey = (c.OPENAI_REALTIME_API_KEY ?? c.OPENAI_API_KEY ?? "").trim();
   try {
     const body = await request.json().catch(() => ({}));
-    if (typeof body.OPENAI_API_KEY === "string") apiKey = body.OPENAI_API_KEY;
+    const fromBody =
+      (typeof body.OPENAI_REALTIME_API_KEY === "string"
+        ? body.OPENAI_REALTIME_API_KEY
+        : null) ??
+      (typeof body.OPENAI_API_KEY === "string" ? body.OPENAI_API_KEY : null);
+    if (fromBody) apiKey = fromBody.trim();
   } catch {
     // use config
   }

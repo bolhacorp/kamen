@@ -1,7 +1,8 @@
 import { useCallback } from "react";
 import { useLiveAvatarContext } from "./context";
 
-export const useAvatarActions = (mode: "FULL" | "LITE") => {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- mode reserved for future behavior
+export const useAvatarActions = (_mode: "FULL" | "LITE") => {
   const { sessionRef } = useLiveAvatarContext();
 
   const interrupt = useCallback(() => {
@@ -10,18 +11,9 @@ export const useAvatarActions = (mode: "FULL" | "LITE") => {
 
   const repeat = useCallback(
     async (message: string) => {
-      if (mode === "FULL") {
-        return sessionRef.current.repeat(message);
-      } else if (mode === "LITE") {
-        const res = await fetch("/api/elevenlabs-text-to-speech", {
-          method: "POST",
-          body: JSON.stringify({ text: message }),
-        });
-        const { audio } = await res.json();
-        return sessionRef.current.repeatAudio(audio);
-      }
+      return sessionRef.current.repeat(message);
     },
-    [sessionRef, mode],
+    [sessionRef],
   );
 
   const startListening = useCallback(() => {

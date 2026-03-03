@@ -9,6 +9,7 @@ import {
   AgentEventsEnum,
   VoiceChatConfig,
 } from "@heygen/liveavatar-web-sdk";
+import { logLiveAvatar } from "../pipeline-log";
 import { LiveAvatarSessionMessage } from "./types";
 
 type LiveAvatarContextProps = {
@@ -61,21 +62,57 @@ const useSessionState = (sessionRef: React.RefObject<LiveAvatarSession>) => {
 
   useEffect(() => {
     if (sessionRef.current) {
-      sessionRef.current.on(SessionEvent.SESSION_STATE_CHANGED, (state) => {
+      const session = sessionRef.current;
+      session.on(SessionEvent.SESSION_STATE_CHANGED, (state) => {
+        logLiveAvatar("Session state changed", "info", { state });
         setSessionState(state);
         if (state === SessionState.DISCONNECTED) {
-          sessionRef.current.removeAllListeners();
-          sessionRef.current.voiceChat.removeAllListeners();
+          session.removeAllListeners();
+          session.voiceChat.removeAllListeners();
           setIsStreamReady(false);
         }
       });
-      sessionRef.current.on(SessionEvent.SESSION_STREAM_READY, () => {
+      session.on(SessionEvent.SESSION_STREAM_READY, () => {
+        logLiveAvatar("Session stream ready (video track available)", "info");
         setIsStreamReady(true);
       });
-      sessionRef.current.on(
-        SessionEvent.SESSION_CONNECTION_QUALITY_CHANGED,
-        setConnectionQuality,
-      );
+      session.on(SessionEvent.SESSION_CONNECTION_QUALITY_CHANGED, (quality) => {
+        logLiveAvatar("Connection quality changed", "debug", { quality });
+        setConnectionQuality(quality);
+      });
+      session.on(SessionEvent.SESSION_DISCONNECTED, (reason) => {
+        logLiveAvatar("Session disconnected", "info", { reason });
+      });
+      session.on(AgentEventsEnum.USER_SPEAK_STARTED, (e) => {
+        logLiveAvatar("LiveAvatar event: user.speak_started", "info", {
+          event_id: e.event_id,
+        });
+      });
+      session.on(AgentEventsEnum.USER_SPEAK_ENDED, (e) => {
+        logLiveAvatar("LiveAvatar event: user.speak_ended", "info", {
+          event_id: e.event_id,
+        });
+      });
+      session.on(AgentEventsEnum.AVATAR_SPEAK_STARTED, (e) => {
+        logLiveAvatar("LiveAvatar event: avatar.speak_started", "info", {
+          event_id: e.event_id,
+        });
+      });
+      session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, (e) => {
+        logLiveAvatar("LiveAvatar event: avatar.speak_ended", "info", {
+          event_id: e.event_id,
+        });
+      });
+      session.on(AgentEventsEnum.USER_TRANSCRIPTION, (e) => {
+        logLiveAvatar("LiveAvatar event: user.transcription", "info", {
+          text: (e as { text?: string }).text?.slice(0, 80),
+        });
+      });
+      session.on(AgentEventsEnum.AVATAR_TRANSCRIPTION, (e) => {
+        logLiveAvatar("LiveAvatar event: avatar.transcription", "info", {
+          text: (e as { text?: string }).text?.slice(0, 80),
+        });
+      });
     }
   }, [sessionRef]);
 
@@ -129,54 +166,6 @@ const useTalkingState = (sessionRef: React.RefObject<LiveAvatarSession>) => {
 
   return { isUserTalking, isAvatarTalking };
 };
-
-// const useChatHistoryState = (
-//   sessionRef: React.RefObject<LiveAvatarSession>
-// ) => {
-//   const [messages, setMessages] = useState<LiveAvatarSessionMessage[]>([]);
-//   const currentSenderRef = useRef<MessageSender | null>(null);
-
-//   // useEffect(() => {
-//   //   if (sessionRef.current) {
-//   //     const handleMessage = (
-//   //       sender: MessageSender,
-//   //       { task_id, message }: { task_id: string; message: string }
-//   //     ) => {
-//   //       if (currentSenderRef.current === sender) {
-//   //         setMessages((prev) => [
-//   //           ...prev.slice(0, -1),
-//   //           {
-//   //             ...prev[prev.length - 1]!,
-//   //             message: [prev[prev.length - 1]!.message, message].join(""),
-//   //           },
-//   //         ]);
-//   //       } else {
-//   //         currentSenderRef.current = sender;
-//   //         setMessages((prev) => [
-//   //           ...prev,
-//   //           {
-//   //             id: task_id,
-//   //             sender: sender,
-//   //             message,
-//   //             timestamp: Date.now(),
-//   //           },
-//   //         ]);
-//   //       }
-//   //     };
-
-//   //     sessionRef.current.on(
-//   //       AgentEventsEnum.USER_SPEAK_STARTED,
-//   //       (data) => console.log("USER_SPEAK_STARTED", data)
-//   //       handleMessage(MessageSender.USER, {
-//   //   task_id: data.,
-//   //   message: data.text || "",
-//   // })
-//   //     );
-//   //   }
-//   // }, [sessionRef]);
-
-//   return { messages };
-// };
 
 export const LiveAvatarContextProvider = ({
   children,

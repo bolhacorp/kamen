@@ -7,6 +7,15 @@ interface StartFullModeSessionRequestBody {
 
 export async function POST(request: NextRequest) {
   const config = getConfig();
+  if (!config.USE_FULL_MODE) {
+    return new Response(
+      JSON.stringify({
+        error:
+          "Full mode is turned off. Enable “Use Full mode” in Settings (/config) to use LiveAvatar voice & context.",
+      }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
+  }
   const apiKey = (config.API_KEY ?? "").trim();
   const avatarId = (config.AVATAR_ID ?? "").trim();
   const voiceId = (config.VOICE_ID ?? "").trim();
@@ -69,10 +78,15 @@ export async function POST(request: NextRequest) {
           console.error("Failed to parse error response:", e);
         }
       } else {
-        // If it's not JSON, try to get the text
         const text = await res.text();
-        console.log("Error response (text):", text);
-        errorMessage = text || errorMessage;
+        if (text)
+          errorMessage = text.length > 200 ? text.slice(0, 200) + "…" : text;
+        if (process.env.NODE_ENV === "development") {
+          console.error(
+            "Session start error response (text):",
+            text?.slice(0, 500),
+          );
+        }
       }
 
       return new Response(JSON.stringify({ error: errorMessage }), {

@@ -255,6 +255,68 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
     this.sendCommandEvent(data as CommandEvent);
   }
 
+  /**
+   * Send base64-encoded PCM 16-bit 24kHz audio to LiveAvatar LITE (agent.speak).
+   * Use for True LITE when piping OpenAI Realtime output_audio.delta to LiveAvatar.
+   * Returns the event_id used (pass to sendAgentSpeakEnd when the turn is done).
+   */
+  public sendAgentSpeakBase64(base64Audio: string, eventId?: string): string {
+    if (
+      !this._sessionEventSocket ||
+      this._sessionEventSocket.readyState !== WebSocket.OPEN
+    ) {
+      console.warn("WebSocket not open to send agent.speak");
+      return eventId ?? "";
+    }
+    const event_id = eventId ?? this.generateEventId();
+    this._sessionEventSocket.send(
+      JSON.stringify({
+        type: "agent.speak",
+        event_id,
+        audio: base64Audio,
+      }),
+    );
+    return event_id;
+  }
+
+  /**
+   * Signal end of a speaking turn (agent.speak_end). Use the same eventId as for sendAgentSpeakBase64.
+   */
+  public sendAgentSpeakEnd(eventId: string): void {
+    if (
+      !this._sessionEventSocket ||
+      this._sessionEventSocket.readyState !== WebSocket.OPEN
+    ) {
+      console.warn("WebSocket not open to send agent.speak_end");
+      return;
+    }
+    this._sessionEventSocket.send(
+      JSON.stringify({
+        type: "agent.speak_end",
+        event_id: eventId,
+      }),
+    );
+  }
+
+  /**
+   * Send LITE session.keep_alive via websocket (per LiveAvatar LITE docs).
+   * Call periodically (e.g. every 2–3 min) to avoid 5-minute idle disconnect.
+   */
+  public sendSessionKeepAliveWs(): void {
+    if (
+      !this._sessionEventSocket ||
+      this._sessionEventSocket.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+    this._sessionEventSocket.send(
+      JSON.stringify({
+        type: "session.keep_alive",
+        event_id: this.generateEventId(),
+      }),
+    );
+  }
+
   private trackEvents(): void {
     const mediaStream = new MediaStream();
     this.room.on(

@@ -6,6 +6,8 @@ import {
   useSession,
   useTextChat,
   useVoiceChat,
+  useTrueLiteRealtime,
+  useLiveAvatarContext,
 } from "../liveavatar";
 import { SessionState, VoiceChatConfig } from "@heygen/liveavatar-web-sdk";
 import { useAvatarActions } from "../liveavatar/useAvatarActions";
@@ -43,6 +45,8 @@ const LiveAvatarSessionComponent: React.FC<{
     keepAlive,
     attachElement,
   } = useSession();
+  const { sessionRef } = useLiveAvatarContext();
+  useTrueLiteRealtime(mode === "LITE_TRUE", sessionRef, sessionState);
   const {
     isAvatarTalking,
     isUserTalking,
@@ -58,13 +62,15 @@ const LiveAvatarSessionComponent: React.FC<{
     error: voiceChatError,
   } = useVoiceChat();
 
-  // For useAvatarActions, treat FULL_PTT as FULL since they share the same API
-  const avatarActionsMode = mode === "FULL_PTT" ? "FULL" : mode;
+  // For useAvatarActions, treat FULL_PTT as FULL and LITE_TRUE as LITE
+  const avatarActionsMode =
+    mode === "FULL_PTT" ? "FULL" : mode === "LITE_TRUE" ? "LITE" : mode;
   const { interrupt, repeat, startListening, stopListening } =
     useAvatarActions(avatarActionsMode);
 
-  // For useTextChat, treat FULL_PTT as FULL since they share the same API
-  const textChatMode = mode === "FULL_PTT" ? "FULL" : mode;
+  // For useTextChat, treat FULL_PTT as FULL and LITE_TRUE as LITE
+  const textChatMode =
+    mode === "FULL_PTT" ? "FULL" : mode === "LITE_TRUE" ? "LITE" : mode;
   const { sendMessage } = useTextChat(textChatMode);
   const videoRef = useRef<HTMLVideoElement>(null);
 

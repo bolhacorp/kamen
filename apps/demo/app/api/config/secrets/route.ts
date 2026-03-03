@@ -1,4 +1,4 @@
-import { getConfig } from "../../../secrets";
+import { getConfig } from "../../secrets";
 
 /**
  * List LiveAvatar secrets (OPENAI_API_KEY only) for the Realtime secret dropdown.

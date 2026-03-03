@@ -4,6 +4,15 @@ import { getConfig } from "../../../secrets";
 /** Test FULL mode: request a session token with current or provided config. */
 export async function POST(request: NextRequest) {
   const config = getConfig();
+  if (!config.USE_FULL_MODE) {
+    return Response.json(
+      {
+        success: false,
+        error: "Full mode is turned off. Enable it in Settings to test.",
+      },
+      { status: 400 },
+    );
+  }
   let apiKey = config.API_KEY;
   let apiUrl = config.API_URL;
   let avatarId = config.AVATAR_ID;

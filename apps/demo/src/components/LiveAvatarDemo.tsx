@@ -1,12 +1,29 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { LiveAvatarSession } from "./LiveAvatarSession";
 import { Header } from "./Header";
 import { Loading } from "./Loading";
+import { PipelineLogViewer } from "./PipelineLogViewer";
 import { SessionInteractivityMode } from "@heygen/liveavatar-web-sdk";
+import { logOrchestrator } from "../pipeline-log";
 
-export type SessionMode = "FULL" | "FULL_PTT" | "LITE";
+export type SessionMode = "FULL" | "FULL_PTT" | "LITE" | "LITE_TRUE";
+
+type ConfigSummary = {
+  fullReady: boolean;
+  liteReady: boolean;
+  trueLiteReady?: boolean;
+  liteProvider: "openai_realtime" | "true_lite" | null;
+  startMode: "FULL" | "FULL_PTT" | "LITE" | "LITE_TRUE" | null;
+  error: string | null;
+  useFullMode: boolean;
+  useLiteRealtime: boolean;
+  useTrueLite?: boolean;
+  hasApiKey: boolean;
+  hasAvatarId: boolean;
+};
 
 async function ensureMicrophoneAccess(): Promise<
   { ok: true } | { ok: false; error: string }
@@ -68,131 +85,337 @@ async function ensureMicrophoneAccess(): Promise<
   }
 }
 
+function formatStartMode(mode: ConfigSummary["startMode"]): string {
+  if (mode === "FULL") return "Full (voice)";
+  if (mode === "FULL_PTT") return "Full (push to talk)";
+  if (mode === "LITE") return "Lite (LiveAvatar-managed)";
+  if (mode === "LITE_TRUE") return "True Lite";
+  return "—";
+}
+
+function formatLiteProvider(summary: ConfigSummary): string {
+  if (summary.liteProvider === "true_lite")
+    return "True LITE (we manage Realtime)";
+  if (summary.liteProvider === "openai_realtime")
+    return "OpenAI Realtime (LiveAvatar-managed)";
+  return "—";
+}
+
 export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
   const [sessionToken, setSessionToken] = useState("");
   const [mode, setMode] = useState<SessionMode>("FULL");
   const [error, setError] = useState<string | null>(null);
   const [isLoadingToken, setIsLoadingToken] = useState(false);
+  const [summary, setSummary] = useState<ConfigSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [micStatus, setMicStatus] = useState<
+    "idle" | "checking" | "ok" | "error"
+  >("idle");
+  const [micError, setMicError] = useState<string | null>(null);
+  const [showLogViewer, setShowLogViewer] = useState(false);
 
-  const handleStartFullSession = async (pushToTalk: boolean = false) => {
-    setError(null);
-
-    const mic = await ensureMicrophoneAccess();
-    if (!mic.ok) {
-      setError(mic.error);
-      return;
-    }
-
-    setIsLoadingToken(true);
-
+  const refreshSummary = useCallback(async () => {
+    setSummaryLoading(true);
+    logOrchestrator(
+      "Fetching config summary (GET /api/config/summary)",
+      "info",
+    );
     try {
-      const res = await fetch("/api/start-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pushToTalk }),
+      const res = await fetch("/api/config/summary");
+      const data = await res.json().catch(() => ({}));
+      setSummary(data);
+      logOrchestrator("Config summary loaded", "info", {
+        startMode: data.startMode ?? null,
+        error: data.error ?? null,
+        fullReady: data.fullReady,
+        trueLiteReady: data.trueLiteReady,
+        liteProvider: data.liteProvider ?? null,
       });
-
-      if (!res.ok) {
-        const err = await res.json();
-        console.error("Failed to start full session", err);
-        setError(err?.error ?? "Unknown error");
-        setIsLoadingToken(false);
-        return;
-      }
-
-      const { session_token } = await res.json();
-      setSessionToken(session_token);
-      setMode(pushToTalk ? "FULL_PTT" : "FULL");
-      setIsLoadingToken(false);
-    } catch (e: unknown) {
-      setError((e as Error).message);
-      setIsLoadingToken(false);
+    } catch (e) {
+      setSummary(null);
+      logOrchestrator("Config summary fetch failed", "error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setSummaryLoading(false);
     }
-  };
+  }, []);
 
-  const handleStartLiteSession = async () => {
+  useEffect(() => {
+    refreshSummary();
+  }, [refreshSummary]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") refreshSummary();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [refreshSummary]);
+
+  const checkMic = useCallback(async () => {
+    setMicStatus("checking");
+    setMicError(null);
+    const result = await ensureMicrophoneAccess();
+    if (result.ok) {
+      setMicStatus("ok");
+    } else {
+      setMicStatus("error");
+      setMicError(result.error);
+    }
+  }, []);
+
+  const handleStart = async () => {
     setError(null);
 
     const mic = await ensureMicrophoneAccess();
     if (!mic.ok) {
       setError(mic.error);
+      setMicStatus("error");
+      setMicError(mic.error);
+      logOrchestrator("Start aborted: microphone check failed", "warn", {
+        error: mic.error,
+      });
+      return;
+    }
+    setMicStatus("ok");
+
+    if (summary?.error || !summary?.startMode) {
+      const msg =
+        summary?.error ??
+        "Configuration is incomplete. Check Settings (/config).";
+      setError(msg);
+      logOrchestrator("Start aborted: config not ready", "warn", {
+        error: msg,
+      });
       return;
     }
 
     setIsLoadingToken(true);
+    logOrchestrator(
+      "Requesting session token (POST /api/session/start)",
+      "info",
+      {
+        expectedMode: summary.startMode,
+      },
+    );
 
     try {
-      const res = await fetch("/api/start-lite-session", { method: "POST" });
+      const res = await fetch("/api/session/start", { method: "POST" });
+
+      const data = (await res.json().catch(() => ({}))) as {
+        session_token?: string;
+        mode?: string;
+        error?: string;
+      };
 
       if (!res.ok) {
-        const err = await res.json();
-        setError(err?.error ?? "Unknown error");
+        setError(data?.error ?? "Failed to start session");
         setIsLoadingToken(false);
+        logOrchestrator("Session start failed", "error", {
+          status: res.status,
+          error: data?.error,
+        });
         return;
       }
 
-      const { session_token } = await res.json();
-      setSessionToken(session_token);
-      setMode("LITE");
+      setSessionToken(data.session_token ?? "");
+      const resolvedMode: SessionMode =
+        data.mode === "FULL_PTT" ||
+        data.mode === "LITE" ||
+        data.mode === "LITE_TRUE"
+          ? data.mode
+          : "FULL";
+      setMode(resolvedMode);
       setIsLoadingToken(false);
+      logOrchestrator("Session token received, starting LiveAvatar", "info", {
+        mode: resolvedMode,
+        tokenPrefix: (data.session_token ?? "").slice(0, 20) + "…",
+      });
     } catch (e: unknown) {
       setError((e as Error).message);
       setIsLoadingToken(false);
+      logOrchestrator("Session start request threw", "error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
   };
 
-  const onSessionStopped = () => {
+  const onSessionStopped = useCallback(() => {
+    logOrchestrator("Session stopped (user or disconnect)", "info");
     setSessionToken("");
-  };
+  }, []);
 
   const voiceChatConfig = useMemo(() => {
-    // In LITE, avoid initializing voice chat at all (safer)
-    if (mode === "LITE") return false;
-
+    if (mode === "LITE_TRUE") return false; // We send mic to OpenAI only; no voice chat to LiveAvatar
     if (mode === "FULL_PTT") {
       return { mode: SessionInteractivityMode.PUSH_TO_TALK };
     }
-
     return true;
   }, [mode]);
 
+  const canStart =
+    summary && summary.startMode && !summary.error && !summaryLoading;
+
   return (
     <div className="app-container">
+      <button
+        type="button"
+        onClick={() => setShowLogViewer((prev) => !prev)}
+        className="fixed bottom-4 right-4 z-[100] px-4 py-2 rounded-lg bg-gray-800/90 hover:bg-gray-700 text-white text-sm font-medium border border-white/20 shadow-lg"
+        title={
+          showLogViewer
+            ? "Close pipeline log"
+            : "Open pipeline log (OpenAI Realtime, LiveAvatar, Orchestrator)"
+        }
+      >
+        Log
+      </button>
+      {showLogViewer && <PipelineLogViewer />}
       {!sessionToken && !isLoadingToken ? (
         <div className="idle-screen screen-transition">
           <Header />
           <div className="idle-background" />
+
+          {/* Overview */}
+          <div
+            className="overview-panel"
+            style={{
+              marginBottom: 24,
+              padding: "16px 20px",
+              background: "rgba(0,0,0,0.4)",
+              borderRadius: 12,
+              maxWidth: 420,
+              width: "100%",
+              textAlign: "left",
+              border: "1px solid rgba(255,255,255,0.15)",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 14,
+                fontWeight: 600,
+                marginBottom: 12,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              Status
+              {summary && (
+                <button
+                  type="button"
+                  onClick={() => refreshSummary()}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "rgba(255,255,255,0.7)",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    textDecoration: "underline",
+                  }}
+                >
+                  Refresh
+                </button>
+              )}
+            </div>
+            {summaryLoading ? (
+              <p style={{ fontSize: 13, color: "rgba(255,255,255,0.7)" }}>
+                Loading config…
+              </p>
+            ) : summary ? (
+              <ul
+                style={{
+                  listStyle: "none",
+                  padding: 0,
+                  margin: 0,
+                  fontSize: 13,
+                }}
+              >
+                <li style={{ marginBottom: 6 }}>
+                  <strong>Mode:</strong>{" "}
+                  {summary.startMode
+                    ? formatStartMode(summary.startMode)
+                    : "Not configured"}
+                </li>
+                {(summary.startMode === "LITE" ||
+                  summary.startMode === "LITE_TRUE") &&
+                  summary.liteProvider && (
+                    <li style={{ marginBottom: 6 }}>
+                      <strong>Lite provider:</strong>{" "}
+                      {formatLiteProvider(summary)}
+                    </li>
+                  )}
+                <li style={{ marginBottom: 6 }}>
+                  <strong>Microphone:</strong>{" "}
+                  {micStatus === "idle" && (
+                    <button
+                      type="button"
+                      onClick={checkMic}
+                      style={{
+                        background: "rgba(255,255,255,0.15)",
+                        border: "none",
+                        color: "#fff",
+                        padding: "4px 10px",
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        fontSize: 12,
+                      }}
+                    >
+                      Check
+                    </button>
+                  )}
+                  {micStatus === "checking" && "Checking…"}
+                  {micStatus === "ok" && "OK"}
+                  {micStatus === "error" && (micError ?? "Error")}
+                </li>
+                {summary.error && (
+                  <li style={{ color: "rgb(248 113 113)", marginTop: 8 }}>
+                    {summary.error}
+                  </li>
+                )}
+              </ul>
+            ) : (
+              <p style={{ fontSize: 13, color: "rgba(255,255,255,0.7)" }}>
+                Could not load config.{" "}
+                <Link href="/config" className="text-blue-300 hover:underline">
+                  Open Settings
+                </Link>
+              </p>
+            )}
+          </div>
 
           {error && (
             <div className="error-message">
               {error.startsWith("Microphone") ||
               error.startsWith("No microphone")
                 ? error
-                : "Error getting session token: " + error}
+                : "Error: " + error}
             </div>
           )}
 
           <div className="flex flex-col gap-3">
             <button
-              onClick={() => handleStartFullSession(false)}
+              onClick={handleStart}
+              disabled={!canStart || summaryLoading}
               className="start-conversation-button"
+              style={{
+                opacity: canStart ? 1 : 0.7,
+                cursor: canStart ? "pointer" : "not-allowed",
+              }}
             >
               Iniciar conversa
             </button>
-
-            <button
-              onClick={() => handleStartFullSession(true)}
-              className="start-conversation-button"
+            <Link
+              href="/config"
+              style={{
+                fontSize: 14,
+                color: "rgba(255,255,255,0.8)",
+                textDecoration: "none",
+              }}
             >
-              Iniciar conversa (Push to Talk)
-            </button>
-
-            <button
-              onClick={handleStartLiteSession}
-              className="start-conversation-button"
-            >
-              Iniciar conversa (Lite)
-            </button>
+              Settings
+            </Link>
           </div>
         </div>
       ) : isLoadingToken ? (

@@ -1,3 +1,6 @@
+/**
+ * @deprecated Use POST /api/session/start instead (unified session start for FULL, LITE, and LITE_TRUE).
+ */
 import { getConfig } from "../secrets";
 
 const OPENAI_REALTIME_VOICES = [
@@ -29,7 +32,7 @@ export async function POST() {
     return new Response(
       JSON.stringify({
         error:
-          "OpenAI Realtime is enabled but OPENAI_REALTIME_SECRET_ID is missing. Register your OpenAI key in Settings (/config) and select the secret.",
+          "OpenAI Realtime is enabled but no secret is registered. In Settings (/config), enter your OpenAI API key (for Realtime) and click Register, then save.",
       }),
       { status: 400, headers: { "Content-Type": "application/json" } },
     );
@@ -47,6 +50,7 @@ export async function POST() {
         voice?: string;
         model?: string;
         temperature?: number;
+        instructions?: string;
       };
     } = {
       mode: "LITE",
@@ -59,6 +63,7 @@ export async function POST() {
       const model = (config.OPENAI_REALTIME_MODEL ?? "gpt-realtime").trim();
       const voice = (config.OPENAI_REALTIME_VOICE ?? "marin").trim();
       const temperature = config.OPENAI_REALTIME_TEMPERATURE ?? 0.8;
+      const instructions = (config.OPENAI_REALTIME_INSTRUCTIONS ?? "").trim();
       body.openai_realtime_config = {
         secret_id: secretId,
         model: model || undefined,
@@ -73,6 +78,7 @@ export async function POST() {
           temperature <= 1.2
             ? temperature
             : undefined,
+        ...(instructions ? { instructions } : {}),
       };
       if (body.openai_realtime_config.voice === undefined)
         delete body.openai_realtime_config.voice;

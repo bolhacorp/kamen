@@ -11,12 +11,17 @@ type Config = {
   VOICE_ID: string;
   CONTEXT_ID: string;
   LANGUAGE: string;
+  USE_FULL_MODE: boolean;
+  USE_PUSH_TO_TALK_FOR_FULL: boolean;
   ELEVENLABS_API_KEY: string;
   OPENAI_API_KEY: string;
   USE_ELEVENLABS_FOR_LITE: boolean;
   USE_OPENAI_FOR_LITE: boolean;
   USE_OPENAI_REALTIME_FOR_LITE: boolean;
+  USE_TRUE_LITE: boolean;
+  OPENAI_REALTIME_API_KEY: string;
   OPENAI_REALTIME_SECRET_ID: string;
+  OPENAI_REALTIME_PROMPT_ID: string;
   OPENAI_REALTIME_MODEL: string;
   OPENAI_REALTIME_VOICE: string;
   OPENAI_REALTIME_TEMPERATURE: number;
@@ -31,12 +36,17 @@ const defaultConfig: Config = {
   VOICE_ID: "",
   CONTEXT_ID: "",
   LANGUAGE: "pt",
+  USE_FULL_MODE: true,
+  USE_PUSH_TO_TALK_FOR_FULL: false,
   ELEVENLABS_API_KEY: "",
   OPENAI_API_KEY: "",
   USE_ELEVENLABS_FOR_LITE: false,
   USE_OPENAI_FOR_LITE: false,
   USE_OPENAI_REALTIME_FOR_LITE: false,
+  USE_TRUE_LITE: false,
+  OPENAI_REALTIME_API_KEY: "",
   OPENAI_REALTIME_SECRET_ID: "",
+  OPENAI_REALTIME_PROMPT_ID: "",
   OPENAI_REALTIME_MODEL: "gpt-realtime",
   OPENAI_REALTIME_VOICE: "marin",
   OPENAI_REALTIME_TEMPERATURE: 0.8,
@@ -59,9 +69,11 @@ const OPENAI_REALTIME_VOICES = [
   { value: "cedar", label: "Cedar" },
 ] as const;
 
-const OPENAI_REALTIME_MODELS = [
+/** Fallback when OpenAI model list cannot be fetched */
+const OPENAI_REALTIME_MODELS_FALLBACK = [
   { value: "gpt-realtime", label: "gpt-realtime" },
-] as const;
+  { value: "gpt-4o-realtime-preview", label: "gpt-4o-realtime-preview" },
+];
 
 type TestState = "idle" | "testing" | "ok" | "error";
 
@@ -81,6 +93,8 @@ export default function ConfigPage() {
     state: TestState;
     message?: string;
   }>({ state: "idle" });
+  // Reserved for future ElevenLabs test button
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- reserved for UI
   const [testElevenLabs, setTestElevenLabs] = useState<{
     state: TestState;
     message?: string;
@@ -93,8 +107,12 @@ export default function ConfigPage() {
     { id: string; name: string; language?: string }[]
   >([]);
   const [avatars, setAvatars] = useState<{ id: string; name: string }[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- setSecrets used in loadLists
   const [secrets, setSecrets] = useState<
     { id: string; secret_name: string; secret_type: string }[]
+  >([]);
+  const [openaiRealtimeModels, setOpenaiRealtimeModels] = useState<
+    { id: string; created?: number }[]
   >([]);
   const [registerSecretLoading, setRegisterSecretLoading] = useState(false);
   const [listsLoading, setListsLoading] = useState(false);
@@ -108,6 +126,15 @@ export default function ConfigPage() {
       [...new Set(voices.map((v) => v.language).filter(Boolean))] as string[],
     [voices],
   ).sort();
+
+  const realtimeModelOptions = useMemo(() => {
+    const fromApi = openaiRealtimeModels.map((m) => ({
+      value: m.id,
+      label: m.id,
+    }));
+    if (fromApi.length > 0) return fromApi;
+    return OPENAI_REALTIME_MODELS_FALLBACK;
+  }, [openaiRealtimeModels]);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -138,6 +165,7 @@ export default function ConfigPage() {
       Promise<{
         secrets?: { id: string; secret_name: string; secret_type: string }[];
       }>,
+      Promise<{ models?: { id: string; created?: number }[] }>,
     ] = [
       fetch("/api/config/voices").then((r) =>
         r.ok ? r.json() : { voices: [] },
@@ -148,12 +176,26 @@ export default function ConfigPage() {
       fetch("/api/config/secrets").then((r) =>
         r.ok ? r.json() : { secrets: [] },
       ),
+      fetch("/api/config/openai-realtime-models").then((r) =>
+        r.ok ? r.json() : { models: [] },
+      ),
     ];
     Promise.all(fetches)
-      .then(([v, a, s]) => {
-        setVoices(v.voices ?? []);
-        setAvatars(a.avatars ?? []);
-        setSecrets(s.secrets ?? []);
+      .then(([v, a, s, m]) => {
+        setVoices(
+          (v.voices ?? []) as { id: string; name: string; language?: string }[],
+        );
+        setAvatars((a.avatars ?? []) as { id: string; name: string }[]);
+        setSecrets(
+          (s.secrets ?? []) as {
+            id: string;
+            secret_name: string;
+            secret_type: string;
+          }[],
+        );
+        setOpenaiRealtimeModels(
+          (m.models ?? []) as { id: string; created?: number }[],
+        );
       })
       .catch(() => {})
       .finally(() => setListsLoading(false));
@@ -217,14 +259,17 @@ export default function ConfigPage() {
   };
 
   const registerOpenAISecret = useCallback(async () => {
-    if (!config.OPENAI_API_KEY?.trim()) return;
+    const key =
+      (config.OPENAI_REALTIME_API_KEY ?? "").trim() ||
+      (config.OPENAI_API_KEY ?? "").trim();
+    if (!key) return;
     setRegisterSecretLoading(true);
     try {
       const res = await fetch("/api/config/register-openai-secret", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          OPENAI_API_KEY: config.OPENAI_API_KEY.trim(),
+          OPENAI_REALTIME_API_KEY: key,
           secret_name: "OpenAI Realtime",
         }),
       });
@@ -237,12 +282,7 @@ export default function ConfigPage() {
       const secretId = data.secret_id;
       if (secretId) {
         setConfig((prev) => ({ ...prev, OPENAI_REALTIME_SECRET_ID: secretId }));
-        const listRes = await fetch("/api/config/secrets");
-        if (listRes.ok) {
-          const listData = await listRes.json();
-          setSecrets(listData.secrets ?? []);
-        }
-        setSaveMessage("Secret registered. Select it above and save.");
+        setSaveMessage("Secret registered. Save config to persist.");
         setSaveStatus("ok");
       }
     } catch (e) {
@@ -251,7 +291,7 @@ export default function ConfigPage() {
     } finally {
       setRegisterSecretLoading(false);
     }
-  }, [config.OPENAI_API_KEY]);
+  }, [config.OPENAI_REALTIME_API_KEY, config.OPENAI_API_KEY]);
 
   const checkMicrophone = useCallback(async () => {
     setMicCheck({ state: "testing" });
@@ -315,35 +355,78 @@ export default function ConfigPage() {
     }
   };
 
+  const layoutClass =
+    "fixed inset-0 flex flex-col bg-black text-white overflow-hidden";
+  const headerFooterClass = "flex-shrink-0 bg-black border-white/10 z-10";
+  const contentMaxWidth = "max-w-2xl mx-auto w-full px-6 sm:px-8";
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-black text-white p-8">
-        <p>Loading config…</p>
-        <Link href="/" className="text-blue-400 underline mt-4 inline-block">
-          Back to Demo
-        </Link>
+      <div className={layoutClass}>
+        <header
+          className={`${headerFooterClass} border-b`}
+          style={{ paddingTop: "env(safe-area-inset-top)", minHeight: 56 }}
+        >
+          <div
+            className={`${contentMaxWidth} py-4 flex items-center justify-between`}
+          >
+            <h1 className="text-xl font-semibold">Settings</h1>
+            <Link
+              href="/"
+              className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm"
+            >
+              Back to Demo
+            </Link>
+          </div>
+        </header>
+        <main className="flex-1 overflow-y-auto p-8">
+          <p>Loading config…</p>
+        </main>
       </div>
     );
   }
 
   if (loadError) {
     return (
-      <div className="min-h-screen bg-black text-white p-8">
-        <p className="text-red-400">Error: {loadError}</p>
-        <p className="mt-2 text-gray-400">
-          You can still edit and save to create the config file.
-        </p>
-        <Link href="/" className="text-blue-400 underline mt-4 inline-block">
-          Back to Demo
-        </Link>
+      <div className={layoutClass}>
+        <header
+          className={`${headerFooterClass} border-b`}
+          style={{ paddingTop: "env(safe-area-inset-top)", minHeight: 56 }}
+        >
+          <div
+            className={`${contentMaxWidth} py-4 flex items-center justify-between`}
+          >
+            <h1 className="text-xl font-semibold">Settings</h1>
+            <Link
+              href="/"
+              className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm"
+            >
+              Back to Demo
+            </Link>
+          </div>
+        </header>
+        <main className="flex-1 overflow-y-auto p-8">
+          <p className="text-red-400">Error: {loadError}</p>
+          <p className="mt-2 text-gray-400">
+            You can still edit and save to create the config file.
+          </p>
+          <Link href="/" className="text-blue-400 underline mt-4 inline-block">
+            Back to Demo
+          </Link>
+        </main>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-black text-white p-8">
-      <div className="max-w-2xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
+    <div className={layoutClass}>
+      <header
+        className={`${headerFooterClass} border-b`}
+        style={{ paddingTop: "env(safe-area-inset-top)", minHeight: 56 }}
+      >
+        <div
+          className={`${contentMaxWidth} py-4 flex items-center justify-between`}
+        >
           <h1 className="text-2xl font-semibold">Settings</h1>
           <Link
             href="/"
@@ -352,583 +435,562 @@ export default function ConfigPage() {
             Back to Demo
           </Link>
         </div>
-        <p className="text-gray-400 text-sm mb-6">
-          Settings are stored in{" "}
-          <code className="bg-white/10 px-1 rounded">config.local.json</code> on
-          your machine and are not sent to GitHub.
-        </p>
+      </header>
 
-        <form onSubmit={handleSave} className="space-y-8">
-          <section>
-            <h2 className="text-lg font-medium mb-4 text-gray-200">
-              Browser & device
-            </h2>
-            <p className="text-xs text-gray-500 mb-2">
-              Voice features need microphone access. This check uses the same
-              browser API (getUserMedia) that the demo uses during a session to
-              capture and send your voice to LiveAvatar.
-            </p>
-            <p className="text-xs text-gray-500 mb-3">
-              In a session, the SDK creates an audio track from your microphone
-              and publishes it to the LiveAvatar session (LiveKit). So if this
-              check passes, your mic will be used to send audio to the service.
-            </p>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={checkMicrophone}
-                disabled={micCheck.state === "testing"}
-                className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
-              >
-                {micCheck.state === "testing"
-                  ? "Checking…"
-                  : "Check microphone"}
-              </button>
-              {micCheck.state === "ok" && (
-                <span className="text-green-400 text-sm">
-                  {micCheck.message}
-                </span>
-              )}
-              {micCheck.state === "error" && (
-                <span className="text-red-400 text-sm">{micCheck.message}</span>
-              )}
-            </div>
-          </section>
+      <main
+        className="flex-1 overflow-y-auto overflow-x-hidden"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
+        <div className={`${contentMaxWidth} pb-32 pt-6`}>
+          <p className="text-gray-400 text-sm mb-6">
+            Settings are stored in{" "}
+            <code className="bg-white/10 px-1 rounded">config.local.json</code>{" "}
+            on your machine and are not sent to GitHub.
+          </p>
 
-          <section>
-            <h2 className="text-lg font-medium mb-4 text-gray-200">
-              LiveAvatar
-            </h2>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">
-                  API Key
-                </label>
-                <p className="text-xs text-gray-500 mb-1">
-                  Must be a <strong>LiveAvatar</strong> key from{" "}
-                  <a
-                    href="https://app.liveavatar.com/developers"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-400 hover:underline"
-                  >
-                    app.liveavatar.com/developers
-                  </a>
-                  —not a HeyGen key. Leading/trailing spaces are ignored.
-                </p>
-                <input
-                  type="password"
-                  value={config.API_KEY}
-                  onChange={(e) => update("API_KEY", e.target.value)}
-                  className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
-                  placeholder="Your LiveAvatar API key"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">
-                  API URL
-                </label>
-                <input
-                  type="text"
-                  value={config.API_URL}
-                  onChange={(e) => update("API_URL", e.target.value)}
-                  className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
-                  placeholder="https://api.liveavatar.com"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">
-                  Avatar ID
-                </label>
-                {listsLoading ? (
-                  <p className="text-xs text-gray-500">
-                    Loading avatars from API…
-                  </p>
-                ) : avatars.length > 0 ? (
-                  <select
-                    value={
-                      avatars.some((a) => a.id === config.AVATAR_ID)
-                        ? config.AVATAR_ID
-                        : "__custom__"
-                    }
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v !== "__custom__") update("AVATAR_ID", v);
-                    }}
-                    className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
-                  >
-                    <option value="">— Select avatar —</option>
-                    {avatars.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name} ({a.id.slice(0, 8)}…)
-                      </option>
-                    ))}
-                    <option value="__custom__">
-                      — Custom UUID (paste below) —
-                    </option>
-                  </select>
-                ) : null}
-                <input
-                  type="text"
-                  value={config.AVATAR_ID}
-                  onChange={(e) => update("AVATAR_ID", e.target.value)}
-                  className="mt-1 w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
-                  placeholder="Or paste Avatar UUID from LiveAvatar dashboard"
-                />
-              </div>
-              <div>
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={config.IS_SANDBOX}
-                    onClick={() => update("IS_SANDBOX", !config.IS_SANDBOX)}
-                    className={`relative w-11 h-6 rounded-full transition-colors ${
-                      config.IS_SANDBOX ? "bg-blue-500" : "bg-white/20"
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
-                        config.IS_SANDBOX ? "translate-x-5" : "translate-x-0"
-                      }`}
-                    />
-                  </button>
-                  <label className="text-sm text-gray-300">Sandbox mode</label>
-                </div>
-                <p className="text-xs text-gray-500 mt-1.5 ml-0">
-                  When on: sessions use the LiveAvatar sandbox—no credits are
-                  consumed, but sessions end after ~1 minute and only a limited
-                  set of avatars (e.g. Wayne) are available. Use for development
-                  and testing. Turn off for production.
-                </p>
-              </div>
-              <div className="flex items-center gap-3 pt-2">
+          <form id="config-form" onSubmit={handleSave} className="space-y-8">
+            <section>
+              <h2 className="text-lg font-medium mb-4 text-gray-200">
+                Browser & device
+              </h2>
+              <p className="text-xs text-gray-500 mb-2">
+                Voice features need microphone access. This check uses the same
+                browser API (getUserMedia) that the demo uses during a session
+                to capture and send your voice to LiveAvatar.
+              </p>
+              <p className="text-xs text-gray-500 mb-3">
+                In a session, the SDK creates an audio track from your
+                microphone and publishes it to the LiveAvatar session (LiveKit).
+                So if this check passes, your mic will be used to send audio to
+                the service.
+              </p>
+              <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={() =>
-                    runTest(
-                      "/api/config/test/liveavatar",
-                      {
-                        API_KEY: config.API_KEY,
-                        API_URL: config.API_URL,
-                        AVATAR_ID: config.AVATAR_ID,
-                        IS_SANDBOX: config.IS_SANDBOX,
-                      },
-                      setTestLiveAvatar,
-                    )
-                  }
-                  disabled={testLiveAvatar.state === "testing"}
+                  onClick={checkMicrophone}
+                  disabled={micCheck.state === "testing"}
                   className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
                 >
-                  {testLiveAvatar.state === "testing"
-                    ? "Testing…"
-                    : "Test API key"}
+                  {micCheck.state === "testing"
+                    ? "Checking…"
+                    : "Check microphone"}
                 </button>
-                {testLiveAvatar.state === "ok" && (
-                  <span className="text-green-400 text-sm">Key is valid</span>
-                )}
-                {testLiveAvatar.state === "error" && (
-                  <span className="text-red-400 text-sm">
-                    {testLiveAvatar.message}
-                  </span>
-                )}
-              </div>
-            </div>
-          </section>
-
-          <section>
-            <h2 className="text-lg font-medium mb-4 text-gray-200">
-              FULL mode (voice & context)
-            </h2>
-            <p className="text-xs text-gray-500 mb-3">
-              Required for “Iniciar conversa” (full or push-to-talk). Voice and
-              Context must be valid UUIDs.
-            </p>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">
-                  Voice ID
-                </label>
-                {listsLoading ? (
-                  <p className="text-xs text-gray-500">
-                    Loading voices from API…
-                  </p>
-                ) : voices.length > 0 ? (
-                  <select
-                    value={
-                      voices.some((v) => v.id === config.VOICE_ID)
-                        ? config.VOICE_ID
-                        : "__custom__"
-                    }
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v !== "__custom__") update("VOICE_ID", v);
-                    }}
-                    className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
-                  >
-                    <option value="">— Select voice —</option>
-                    {voices.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name} {v.language ? `(${v.language})` : ""} —{" "}
-                        {v.id.slice(0, 8)}…
-                      </option>
-                    ))}
-                    <option value="__custom__">
-                      — Custom UUID (paste below) —
-                    </option>
-                  </select>
-                ) : null}
-                <input
-                  type="text"
-                  value={config.VOICE_ID}
-                  onChange={(e) => update("VOICE_ID", e.target.value)}
-                  className="mt-1 w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
-                  placeholder="Or paste Voice UUID from LiveAvatar dashboard"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">
-                  Context ID
-                </label>
-                <p className="text-xs text-gray-500 mb-1">
-                  The API does not provide a list of contexts; paste the UUID
-                  from your LiveAvatar dashboard.
-                </p>
-                <input
-                  type="text"
-                  value={config.CONTEXT_ID}
-                  onChange={(e) => update("CONTEXT_ID", e.target.value)}
-                  className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
-                  placeholder="Context UUID"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">
-                  Language
-                </label>
-                {listsLoading ? (
-                  <p className="text-xs text-gray-500">Loading…</p>
-                ) : languagesFromVoices.length > 0 ? (
-                  <select
-                    value={
-                      languagesFromVoices.includes(config.LANGUAGE)
-                        ? config.LANGUAGE
-                        : "__custom__"
-                    }
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v !== "__custom__") update("LANGUAGE", v);
-                    }}
-                    className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
-                  >
-                    <option value="">— Select language —</option>
-                    {languagesFromVoices.map((lang) => (
-                      <option key={lang} value={lang}>
-                        {lang}
-                      </option>
-                    ))}
-                    <option value="__custom__">— Custom (enter below) —</option>
-                  </select>
-                ) : null}
-                <input
-                  type="text"
-                  value={config.LANGUAGE}
-                  onChange={(e) => update("LANGUAGE", e.target.value)}
-                  className="mt-1 w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
-                  placeholder="e.g. en, pt (from voices or custom code)"
-                />
-              </div>
-              <div className="flex items-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() =>
-                    runTest(
-                      "/api/config/test/full",
-                      {
-                        API_KEY: config.API_KEY,
-                        API_URL: config.API_URL,
-                        AVATAR_ID: config.AVATAR_ID,
-                        VOICE_ID: config.VOICE_ID,
-                        CONTEXT_ID: config.CONTEXT_ID,
-                        LANGUAGE: config.LANGUAGE,
-                        IS_SANDBOX: config.IS_SANDBOX,
-                      },
-                      setTestFull,
-                    )
-                  }
-                  disabled={testFull.state === "testing"}
-                  className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
-                >
-                  {testFull.state === "testing" ? "Testing…" : "Test FULL mode"}
-                </button>
-                {testFull.state === "ok" && (
+                {micCheck.state === "ok" && (
                   <span className="text-green-400 text-sm">
-                    API key, Avatar, Voice & Context OK
+                    {micCheck.message}
                   </span>
                 )}
-                {testFull.state === "error" && (
+                {micCheck.state === "error" && (
                   <span className="text-red-400 text-sm">
-                    {testFull.message}
+                    {micCheck.message}
                   </span>
                 )}
               </div>
-            </div>
-          </section>
+            </section>
 
-          <section>
-            <h2 className="text-lg font-medium mb-4 text-gray-200">
-              LITE mode (optional)
-            </h2>
-            <p className="text-sm text-gray-400 mb-4">
-              Enable each service you want to use for LITE mode; only then is
-              the API key field shown.
-            </p>
-            <div className="space-y-6">
-              <div>
-                <div className="flex items-center gap-3 mb-3">
+            <section>
+              <h2 className="text-lg font-medium mb-4 text-gray-200">
+                LiveAvatar
+              </h2>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    API Key
+                  </label>
+                  <p className="text-xs text-gray-500 mb-1">
+                    Must be a <strong>LiveAvatar</strong> key from{" "}
+                    <a
+                      href="https://app.liveavatar.com/developers"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:underline"
+                    >
+                      app.liveavatar.com/developers
+                    </a>
+                    —not a HeyGen key. Leading/trailing spaces are ignored.
+                  </p>
+                  <input
+                    type="password"
+                    value={config.API_KEY}
+                    onChange={(e) => update("API_KEY", e.target.value)}
+                    className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                    placeholder="Your LiveAvatar API key"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    API URL
+                  </label>
+                  <input
+                    type="text"
+                    value={config.API_URL}
+                    onChange={(e) => update("API_URL", e.target.value)}
+                    className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                    placeholder="https://api.liveavatar.com"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    Avatar ID
+                  </label>
+                  {listsLoading ? (
+                    <p className="text-xs text-gray-500">
+                      Loading avatars from API…
+                    </p>
+                  ) : avatars.length > 0 ? (
+                    <select
+                      value={
+                        avatars.some((a) => a.id === config.AVATAR_ID)
+                          ? config.AVATAR_ID
+                          : "__custom__"
+                      }
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v !== "__custom__") update("AVATAR_ID", v);
+                      }}
+                      className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
+                    >
+                      <option value="">— Select avatar —</option>
+                      {avatars.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name} ({a.id.slice(0, 8)}…)
+                        </option>
+                      ))}
+                      <option value="__custom__">
+                        — Custom UUID (paste below) —
+                      </option>
+                    </select>
+                  ) : null}
+                  <input
+                    type="text"
+                    value={config.AVATAR_ID}
+                    onChange={(e) => update("AVATAR_ID", e.target.value)}
+                    className="mt-1 w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                    placeholder="Or paste Avatar UUID from LiveAvatar dashboard"
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={config.IS_SANDBOX}
+                      onClick={() => update("IS_SANDBOX", !config.IS_SANDBOX)}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        config.IS_SANDBOX ? "bg-blue-500" : "bg-white/20"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                          config.IS_SANDBOX ? "translate-x-5" : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                    <label className="text-sm text-gray-300">
+                      Sandbox mode
+                    </label>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1.5 ml-0">
+                    When on: sessions use the LiveAvatar sandbox—no credits are
+                    consumed, but sessions end after ~1 minute and only a
+                    limited set of avatars (e.g. Wayne) are available. Use for
+                    development and testing. Turn off for production.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 pt-2">
                   <button
                     type="button"
-                    role="switch"
-                    aria-checked={config.USE_ELEVENLABS_FOR_LITE}
                     onClick={() =>
-                      update(
-                        "USE_ELEVENLABS_FOR_LITE",
-                        !config.USE_ELEVENLABS_FOR_LITE,
+                      runTest(
+                        "/api/config/test/liveavatar",
+                        {
+                          API_KEY: config.API_KEY,
+                          API_URL: config.API_URL,
+                          AVATAR_ID: config.AVATAR_ID,
+                          IS_SANDBOX: config.IS_SANDBOX,
+                        },
+                        setTestLiveAvatar,
                       )
                     }
-                    className={`relative w-11 h-6 rounded-full transition-colors ${
-                      config.USE_ELEVENLABS_FOR_LITE
-                        ? "bg-blue-500"
-                        : "bg-white/20"
-                    }`}
+                    disabled={testLiveAvatar.state === "testing"}
+                    className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
                   >
-                    <span
-                      className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
-                        config.USE_ELEVENLABS_FOR_LITE
-                          ? "translate-x-5"
-                          : "translate-x-0"
-                      }`}
-                    />
+                    {testLiveAvatar.state === "testing"
+                      ? "Testing…"
+                      : "Test API key"}
                   </button>
-                  <label className="text-sm text-gray-300">
-                    Use ElevenLabs for LITE (TTS)
-                  </label>
+                  {testLiveAvatar.state === "ok" && (
+                    <span className="text-green-400 text-sm">Key is valid</span>
+                  )}
+                  {testLiveAvatar.state === "error" && (
+                    <span className="text-red-400 text-sm">
+                      {testLiveAvatar.message}
+                    </span>
+                  )}
                 </div>
-                {config.USE_ELEVENLABS_FOR_LITE && (
-                  <div className="ml-0 space-y-2 pl-0">
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">
-                        ElevenLabs API Key
-                      </label>
-                      <input
-                        type="password"
-                        value={config.ELEVENLABS_API_KEY}
-                        onChange={(e) =>
-                          update("ELEVENLABS_API_KEY", e.target.value)
-                        }
-                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
-                        placeholder="Your ElevenLabs API key"
-                      />
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          runTest(
-                            "/api/config/test/elevenlabs",
-                            { ELEVENLABS_API_KEY: config.ELEVENLABS_API_KEY },
-                            setTestElevenLabs,
-                          )
-                        }
-                        disabled={testElevenLabs.state === "testing"}
-                        className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
-                      >
-                        {testElevenLabs.state === "testing"
-                          ? "Testing…"
-                          : "Test"}
-                      </button>
-                      {testElevenLabs.state === "ok" && (
-                        <span className="text-green-400 text-sm">
-                          Key is valid
-                        </span>
-                      )}
-                      {testElevenLabs.state === "error" && (
-                        <span className="text-red-400 text-sm">
-                          {testElevenLabs.message}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
               </div>
-              <div>
-                <div className="flex items-center gap-3 mb-3">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={config.USE_OPENAI_FOR_LITE}
-                    onClick={() =>
-                      update("USE_OPENAI_FOR_LITE", !config.USE_OPENAI_FOR_LITE)
-                    }
-                    className={`relative w-11 h-6 rounded-full transition-colors ${
-                      config.USE_OPENAI_FOR_LITE ? "bg-blue-500" : "bg-white/20"
+            </section>
+
+            <section>
+              <h2 className="text-lg font-medium mb-4 text-gray-200">
+                FULL mode (voice & context)
+              </h2>
+              <p className="text-sm text-gray-400 mb-4">
+                Like OpenAI and ElevenLabs, only one “stack” is used per
+                session. When Full mode is on, it is used for “Iniciar conversa”
+                (full or push-to-talk). Turn it off when you only use LITE with
+                third-party APIs so full-mode config is not sent.
+              </p>
+              <div className="flex items-center gap-3 mb-4">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={config.USE_FULL_MODE}
+                  onClick={() => update("USE_FULL_MODE", !config.USE_FULL_MODE)}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    config.USE_FULL_MODE ? "bg-blue-500" : "bg-white/20"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                      config.USE_FULL_MODE ? "translate-x-5" : "translate-x-0"
                     }`}
-                  >
-                    <span
-                      className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
-                        config.USE_OPENAI_FOR_LITE
-                          ? "translate-x-5"
-                          : "translate-x-0"
+                  />
+                </button>
+                <label className="text-sm text-gray-300">
+                  Use Full mode (LiveAvatar voice & context)
+                </label>
+              </div>
+              {config.USE_FULL_MODE && (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={config.USE_PUSH_TO_TALK_FOR_FULL}
+                      onClick={() =>
+                        update(
+                          "USE_PUSH_TO_TALK_FOR_FULL",
+                          !config.USE_PUSH_TO_TALK_FOR_FULL,
+                        )
+                      }
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        config.USE_PUSH_TO_TALK_FOR_FULL
+                          ? "bg-blue-500"
+                          : "bg-white/20"
                       }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                          config.USE_PUSH_TO_TALK_FOR_FULL
+                            ? "translate-x-5"
+                            : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                    <label className="text-sm text-gray-300">
+                      Use Push to Talk when starting in Full mode
+                    </label>
+                  </div>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Voice and Context must be valid UUIDs.
+                  </p>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">
+                      Voice ID
+                    </label>
+                    {listsLoading ? (
+                      <p className="text-xs text-gray-500">
+                        Loading voices from API…
+                      </p>
+                    ) : voices.length > 0 ? (
+                      <select
+                        value={
+                          voices.some((v) => v.id === config.VOICE_ID)
+                            ? config.VOICE_ID
+                            : "__custom__"
+                        }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v !== "__custom__") update("VOICE_ID", v);
+                        }}
+                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
+                      >
+                        <option value="">— Select voice —</option>
+                        {voices.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.name} {v.language ? `(${v.language})` : ""} —{" "}
+                            {v.id.slice(0, 8)}…
+                          </option>
+                        ))}
+                        <option value="__custom__">
+                          — Custom UUID (paste below) —
+                        </option>
+                      </select>
+                    ) : null}
+                    <input
+                      type="text"
+                      value={config.VOICE_ID}
+                      onChange={(e) => update("VOICE_ID", e.target.value)}
+                      className="mt-1 w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                      placeholder="Or paste Voice UUID from LiveAvatar dashboard"
                     />
-                  </button>
-                  <label className="text-sm text-gray-300">
-                    Use OpenAI for LITE (chat)
-                  </label>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">
+                      Context ID
+                    </label>
+                    <p className="text-xs text-gray-500 mb-1">
+                      The API does not provide a list of contexts; paste the
+                      UUID from your LiveAvatar dashboard.
+                    </p>
+                    <input
+                      type="text"
+                      value={config.CONTEXT_ID}
+                      onChange={(e) => update("CONTEXT_ID", e.target.value)}
+                      className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                      placeholder="Context UUID"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">
+                      Language
+                    </label>
+                    {listsLoading ? (
+                      <p className="text-xs text-gray-500">Loading…</p>
+                    ) : languagesFromVoices.length > 0 ? (
+                      <select
+                        value={
+                          languagesFromVoices.includes(config.LANGUAGE)
+                            ? config.LANGUAGE
+                            : "__custom__"
+                        }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v !== "__custom__") update("LANGUAGE", v);
+                        }}
+                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
+                      >
+                        <option value="">— Select language —</option>
+                        {languagesFromVoices.map((lang) => (
+                          <option key={lang} value={lang}>
+                            {lang}
+                          </option>
+                        ))}
+                        <option value="__custom__">
+                          — Custom (enter below) —
+                        </option>
+                      </select>
+                    ) : null}
+                    <input
+                      type="text"
+                      value={config.LANGUAGE}
+                      onChange={(e) => update("LANGUAGE", e.target.value)}
+                      className="mt-1 w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                      placeholder="e.g. en, pt (from voices or custom code)"
+                    />
+                  </div>
+                  <div className="flex items-center gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        runTest(
+                          "/api/config/test/full",
+                          {
+                            API_KEY: config.API_KEY,
+                            API_URL: config.API_URL,
+                            AVATAR_ID: config.AVATAR_ID,
+                            VOICE_ID: config.VOICE_ID,
+                            CONTEXT_ID: config.CONTEXT_ID,
+                            LANGUAGE: config.LANGUAGE,
+                            IS_SANDBOX: config.IS_SANDBOX,
+                          },
+                          setTestFull,
+                        )
+                      }
+                      disabled={testFull.state === "testing"}
+                      className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+                    >
+                      {testFull.state === "testing"
+                        ? "Testing…"
+                        : "Test FULL mode"}
+                    </button>
+                    {testFull.state === "ok" && (
+                      <span className="text-green-400 text-sm">
+                        API key, Avatar, Voice & Context OK
+                      </span>
+                    )}
+                    {testFull.state === "error" && (
+                      <span className="text-red-400 text-sm">
+                        {testFull.message}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                {config.USE_OPENAI_FOR_LITE && (
-                  <div className="ml-0 space-y-2 pl-0">
+              )}
+            </section>
+
+            <section>
+              <h2 className="text-lg font-medium mb-4 text-gray-200">
+                LITE mode (OpenAI Realtime)
+              </h2>
+              <p className="text-sm text-gray-400 mb-4">
+                Two options: <strong>True LITE</strong> (we manage Realtime,
+                LiveAvatar only for avatar/lipsync) or{" "}
+                <strong>LiveAvatar-managed LITE</strong> (LiveAvatar brokers
+                Realtime; simpler but custom instructions may not apply). Enable
+                one or both; shared settings below apply to whichever you use.
+              </p>
+
+              <div className="space-y-6 mb-6">
+                <div className="flex items-center gap-6 flex-wrap">
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={config.USE_TRUE_LITE}
+                      onClick={() =>
+                        update("USE_TRUE_LITE", !config.USE_TRUE_LITE)
+                      }
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        config.USE_TRUE_LITE ? "bg-blue-500" : "bg-white/20"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                          config.USE_TRUE_LITE
+                            ? "translate-x-5"
+                            : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                    <label className="text-sm text-gray-300">
+                      True LITE (we manage Realtime, LiveAvatar for lipsync
+                      only)
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={config.USE_OPENAI_REALTIME_FOR_LITE}
+                      onClick={() =>
+                        update(
+                          "USE_OPENAI_REALTIME_FOR_LITE",
+                          !config.USE_OPENAI_REALTIME_FOR_LITE,
+                        )
+                      }
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        config.USE_OPENAI_REALTIME_FOR_LITE
+                          ? "bg-blue-500"
+                          : "bg-white/20"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                          config.USE_OPENAI_REALTIME_FOR_LITE
+                            ? "translate-x-5"
+                            : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                    <label className="text-sm text-gray-300">
+                      LiveAvatar-managed LITE (they broker Realtime)
+                    </label>
+                  </div>
+                </div>
+
+                {(config.USE_TRUE_LITE ||
+                  config.USE_OPENAI_REALTIME_FOR_LITE) && (
+                  <div className="ml-0 space-y-4 pl-0 border border-white/10 rounded-md p-4 bg-white/5">
+                    <h3 className="text-sm font-medium text-gray-200">
+                      OpenAI Realtime settings (used by True LITE and
+                      LiveAvatar-managed)
+                    </h3>
                     <div>
                       <label className="block text-sm text-gray-400 mb-1">
-                        OpenAI API Key
+                        OpenAI API key
                       </label>
-                      <input
-                        type="password"
-                        value={config.OPENAI_API_KEY}
-                        onChange={(e) =>
-                          update("OPENAI_API_KEY", e.target.value)
-                        }
-                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
-                        placeholder="Your OpenAI API key"
-                      />
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          runTest(
-                            "/api/config/test/openai",
-                            { OPENAI_API_KEY: config.OPENAI_API_KEY },
-                            setTestOpenAI,
-                          )
-                        }
-                        disabled={testOpenAI.state === "testing"}
-                        className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
-                      >
-                        {testOpenAI.state === "testing" ? "Testing…" : "Test"}
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          type="password"
+                          value={config.OPENAI_REALTIME_API_KEY}
+                          onChange={(e) =>
+                            update("OPENAI_REALTIME_API_KEY", e.target.value)
+                          }
+                          className="flex-1 min-w-[200px] bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                          placeholder="sk-… (ephemeral keys for True LITE; register for LiveAvatar-managed)"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            runTest(
+                              "/api/config/test/openai",
+                              {
+                                OPENAI_REALTIME_API_KEY:
+                                  config.OPENAI_REALTIME_API_KEY,
+                              },
+                              setTestOpenAI,
+                            )
+                          }
+                          disabled={testOpenAI.state === "testing"}
+                          className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+                        >
+                          {testOpenAI.state === "testing"
+                            ? "Testing…"
+                            : "Test API key"}
+                        </button>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        True LITE: this key is enough — server uses it to mint
+                        ephemeral keys. LiveAvatar-managed: enter key and click
+                        Register below.
+                      </p>
                       {testOpenAI.state === "ok" && (
-                        <span className="text-green-400 text-sm">
+                        <p className="text-xs text-green-400 mt-1">
                           Key is valid
-                        </span>
+                        </p>
                       )}
                       {testOpenAI.state === "error" && (
-                        <span className="text-red-400 text-sm">
+                        <p className="text-xs text-red-400 mt-1">
                           {testOpenAI.message}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <div className="flex items-center gap-3 mb-3">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={config.USE_OPENAI_REALTIME_FOR_LITE}
-                    onClick={() =>
-                      update(
-                        "USE_OPENAI_REALTIME_FOR_LITE",
-                        !config.USE_OPENAI_REALTIME_FOR_LITE,
-                      )
-                    }
-                    className={`relative w-11 h-6 rounded-full transition-colors ${
-                      config.USE_OPENAI_REALTIME_FOR_LITE
-                        ? "bg-blue-500"
-                        : "bg-white/20"
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
-                        config.USE_OPENAI_REALTIME_FOR_LITE
-                          ? "translate-x-5"
-                          : "translate-x-0"
-                      }`}
-                    />
-                  </button>
-                  <label className="text-sm text-gray-300">
-                    Use OpenAI Realtime for LITE (official)
-                  </label>
-                </div>
-                <p className="text-xs text-gray-500 mb-3 ml-0">
-                  LiveAvatar runs STT, LLM, and TTS via OpenAI Realtime; avatar
-                  is lipsync only. Requires registering your OpenAI key as a
-                  LiveAvatar secret below.
-                </p>
-                {config.USE_OPENAI_REALTIME_FOR_LITE && (
-                  <div className="ml-0 space-y-4 pl-0 border border-white/10 rounded-md p-4">
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">
-                        OpenAI secret (LiveAvatar)
-                      </label>
-                      {listsLoading ? (
-                        <p className="text-xs text-gray-500">
-                          Loading secrets…
                         </p>
-                      ) : (
-                        <select
-                          value={config.OPENAI_REALTIME_SECRET_ID}
-                          onChange={(e) =>
-                            update("OPENAI_REALTIME_SECRET_ID", e.target.value)
-                          }
-                          className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
-                        >
-                          <option value="">— Select secret —</option>
-                          {secrets.map((s) => (
-                            <option key={s.id} value={s.id}>
-                              {s.secret_name} ({s.id.slice(0, 8)}…)
-                            </option>
-                          ))}
-                        </select>
                       )}
-                      <p className="text-xs text-gray-500 mt-1">
-                        Register your OpenAI API key with LiveAvatar, then
-                        select it. Use the key field under “Use OpenAI for LITE
-                        (chat)” above when registering.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={registerOpenAISecret}
-                        disabled={
-                          registerSecretLoading ||
-                          !config.OPENAI_API_KEY?.trim()
-                        }
-                        className="mt-2 px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
-                      >
-                        {registerSecretLoading
-                          ? "Registering…"
-                          : "Register OpenAI key with LiveAvatar"}
-                      </button>
                     </div>
                     <div>
                       <label className="block text-sm text-gray-400 mb-1">
                         Realtime model
                       </label>
                       <select
-                        value={config.OPENAI_REALTIME_MODEL}
-                        onChange={(e) =>
-                          update("OPENAI_REALTIME_MODEL", e.target.value)
+                        value={
+                          realtimeModelOptions.some(
+                            (m) => m.value === config.OPENAI_REALTIME_MODEL,
+                          )
+                            ? config.OPENAI_REALTIME_MODEL
+                            : ""
                         }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v) update("OPENAI_REALTIME_MODEL", v);
+                        }}
                         className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
                       >
-                        {OPENAI_REALTIME_MODELS.map((m) => (
+                        <option value="">— Select model —</option>
+                        {realtimeModelOptions.map((m) => (
                           <option key={m.value} value={m.value}>
                             {m.label}
                           </option>
                         ))}
                       </select>
+                      <input
+                        type="text"
+                        value={config.OPENAI_REALTIME_MODEL}
+                        onChange={(e) =>
+                          update("OPENAI_REALTIME_MODEL", e.target.value)
+                        }
+                        className="mt-1 w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                        placeholder="Or type model id (e.g. gpt-realtime)"
+                      />
                     </div>
                     <div>
                       <label className="block text-sm text-gray-400 mb-1">
@@ -947,67 +1009,133 @@ export default function ConfigPage() {
                           </option>
                         ))}
                       </select>
+                      <p className="text-xs text-gray-500 mt-1.5">
+                        <a
+                          href="https://platform.openai.com/playground/tts"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:underline"
+                        >
+                          Test voices in the OpenAI TTS Playground
+                        </a>{" "}
+                        — Marin and Cedar recommended. True LITE: Nova, Fable,
+                        Onyx are not supported by the Realtime API and will use
+                        Marin.
+                      </p>
                     </div>
                     <div>
                       <label className="block text-sm text-gray-400 mb-1">
-                        Temperature (0.6–1.2)
-                      </label>
-                      <input
-                        type="number"
-                        min={0.6}
-                        max={1.2}
-                        step={0.1}
-                        value={config.OPENAI_REALTIME_TEMPERATURE}
-                        onChange={(e) => {
-                          const v = Number(e.target.value);
-                          if (!Number.isNaN(v))
-                            update("OPENAI_REALTIME_TEMPERATURE", v);
-                        }}
-                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">
-                        Instructions (optional)
+                        System instructions
                       </label>
                       <textarea
                         value={config.OPENAI_REALTIME_INSTRUCTIONS}
                         onChange={(e) =>
                           update("OPENAI_REALTIME_INSTRUCTIONS", e.target.value)
                         }
-                        rows={3}
+                        rows={4}
                         className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
-                        placeholder="System prompt for the Realtime model. Stored locally only; not sent to LiveAvatar until they support it."
+                        placeholder="e.g. You are a realtime voice AI. Personality: warm, witty; never claim to be human."
                       />
                       <p className="text-xs text-gray-500 mt-1">
-                        Stored for future use. LiveAvatar’s API does not yet
-                        accept instructions in the session; we will send it when
-                        supported.
+                        True LITE: sent with the session. LiveAvatar-managed: we
+                        send it but they may not forward it.
                       </p>
                     </div>
+                    {config.USE_TRUE_LITE && (
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-1">
+                          OpenAI Prompt ID (optional, True LITE only)
+                        </label>
+                        <input
+                          type="text"
+                          value={config.OPENAI_REALTIME_PROMPT_ID}
+                          onChange={(e) =>
+                            update("OPENAI_REALTIME_PROMPT_ID", e.target.value)
+                          }
+                          className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                          placeholder="pmpt_… (from OpenAI Prompt library)"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                          Replaces or complements system instructions above.
+                        </p>
+                      </div>
+                    )}
+                    {config.USE_OPENAI_REALTIME_FOR_LITE && (
+                      <>
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-1">
+                            Temperature (0.6–1.2, LiveAvatar-managed only)
+                          </label>
+                          <input
+                            type="number"
+                            min={0.6}
+                            max={1.2}
+                            step={0.1}
+                            value={config.OPENAI_REALTIME_TEMPERATURE}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              if (!Number.isNaN(v))
+                                update("OPENAI_REALTIME_TEMPERATURE", v);
+                            }}
+                            className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                          />
+                        </div>
+                        <div>
+                          <button
+                            type="button"
+                            onClick={registerOpenAISecret}
+                            disabled={
+                              registerSecretLoading ||
+                              !(config.OPENAI_REALTIME_API_KEY ?? "").trim()
+                            }
+                            className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+                          >
+                            {registerSecretLoading
+                              ? "Registering…"
+                              : "Register this key with LiveAvatar"}
+                          </button>
+                          {config.OPENAI_REALTIME_SECRET_ID && (
+                            <p className="text-xs text-green-400 mt-2">
+                              Registered. Save config to persist.
+                            </p>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
-            </div>
-          </section>
+            </section>
+          </form>
+        </div>
+      </main>
 
-          <div className="flex flex-wrap gap-3 pt-4">
-            <button
-              type="submit"
-              disabled={saveStatus === "saving"}
-              className="px-6 py-2 rounded-md bg-white text-black font-medium disabled:opacity-50"
-            >
-              {saveStatus === "saving" ? "Saving…" : "Save"}
-            </button>
-            <button
-              type="button"
-              onClick={handleResetDefaults}
-              disabled={saveStatus === "saving"}
-              className="px-6 py-2 rounded-md bg-white/10 hover:bg-white/20 disabled:opacity-50"
-            >
-              Reset to defaults
-            </button>
-          </div>
+      <footer
+        className={`${headerFooterClass} border-t`}
+        style={{
+          paddingBottom: "env(safe-area-inset-bottom)",
+          minHeight: 72,
+        }}
+      >
+        <div
+          className={`${contentMaxWidth} py-4 flex flex-wrap items-center gap-3`}
+        >
+          <button
+            type="submit"
+            form="config-form"
+            disabled={saveStatus === "saving"}
+            className="px-6 py-2 rounded-md bg-white text-black font-medium disabled:opacity-50"
+          >
+            {saveStatus === "saving" ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={handleResetDefaults}
+            disabled={saveStatus === "saving"}
+            className="px-6 py-2 rounded-md bg-white/10 hover:bg-white/20 disabled:opacity-50"
+          >
+            Reset to defaults
+          </button>
           {saveMessage && (
             <p
               className={
@@ -1019,8 +1147,8 @@ export default function ConfigPage() {
               {saveMessage}
             </p>
           )}
-        </form>
-      </div>
+        </div>
+      </footer>
     </div>
   );
 }

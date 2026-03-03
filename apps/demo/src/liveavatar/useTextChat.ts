@@ -1,29 +1,15 @@
 import { useCallback } from "react";
 import { useLiveAvatarContext } from "./context";
 
-export const useTextChat = (mode: "FULL" | "LITE") => {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- mode reserved for future behavior
+export const useTextChat = (_mode: "FULL" | "LITE") => {
   const { sessionRef } = useLiveAvatarContext();
 
   const sendMessage = useCallback(
     async (message: string) => {
-      if (mode === "FULL") {
-        return sessionRef.current.message(message);
-      } else if (mode === "LITE") {
-        const response = await fetch("/api/openai-chat-complete", {
-          method: "POST",
-          body: JSON.stringify({ message }),
-        });
-        const { response: chatResponseText } = await response.json();
-        const res = await fetch("/api/elevenlabs-text-to-speech", {
-          method: "POST",
-          body: JSON.stringify({ text: chatResponseText }),
-        });
-        const { audio } = await res.json();
-        // Have the avatar repeat the audio
-        return sessionRef.current.repeatAudio(audio);
-      }
+      return sessionRef.current.message(message);
     },
-    [sessionRef, mode],
+    [sessionRef],
   );
 
   return {
