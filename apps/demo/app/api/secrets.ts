@@ -14,6 +14,12 @@ const DEFAULTS = {
   OPENAI_API_KEY: "",
   USE_ELEVENLABS_FOR_LITE: false,
   USE_OPENAI_FOR_LITE: false,
+  USE_OPENAI_REALTIME_FOR_LITE: false,
+  OPENAI_REALTIME_SECRET_ID: "",
+  OPENAI_REALTIME_MODEL: "gpt-realtime",
+  OPENAI_REALTIME_VOICE: "marin",
+  OPENAI_REALTIME_TEMPERATURE: 0.8,
+  OPENAI_REALTIME_INSTRUCTIONS: "",
 } as const;
 
 export type Config = {
@@ -28,6 +34,12 @@ export type Config = {
   OPENAI_API_KEY: string;
   USE_ELEVENLABS_FOR_LITE: boolean;
   USE_OPENAI_FOR_LITE: boolean;
+  USE_OPENAI_REALTIME_FOR_LITE: boolean;
+  OPENAI_REALTIME_SECRET_ID: string;
+  OPENAI_REALTIME_MODEL: string;
+  OPENAI_REALTIME_VOICE: string;
+  OPENAI_REALTIME_TEMPERATURE: number;
+  OPENAI_REALTIME_INSTRUCTIONS: string;
 };
 
 function getConfigPath(): string {
@@ -65,6 +77,20 @@ export function getConfig(): Config {
     fromEnv.ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
   if (process.env.OPENAI_API_KEY != null)
     fromEnv.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  if (process.env.OPENAI_REALTIME_SECRET_ID != null)
+    fromEnv.OPENAI_REALTIME_SECRET_ID = process.env.OPENAI_REALTIME_SECRET_ID;
+  if (process.env.OPENAI_REALTIME_MODEL != null)
+    fromEnv.OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL;
+  if (process.env.OPENAI_REALTIME_VOICE != null)
+    fromEnv.OPENAI_REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE;
+  if (process.env.OPENAI_REALTIME_TEMPERATURE != null) {
+    const v = Number(process.env.OPENAI_REALTIME_TEMPERATURE);
+    if (!Number.isNaN(v)) fromEnv.OPENAI_REALTIME_TEMPERATURE = v;
+  }
+  if (process.env.USE_OPENAI_REALTIME_FOR_LITE != null)
+    fromEnv.USE_OPENAI_REALTIME_FOR_LITE =
+      process.env.USE_OPENAI_REALTIME_FOR_LITE === "true" ||
+      process.env.USE_OPENAI_REALTIME_FOR_LITE === "1";
 
   const configPath = getConfigPath();
   let fromFile: Partial<Config> = {};
@@ -80,6 +106,44 @@ export function getConfig(): Config {
         fromFile.CONTEXT_ID = String(anyFile.context_id);
       if (anyFile.avatar_id !== undefined && fromFile.AVATAR_ID === undefined)
         fromFile.AVATAR_ID = String(anyFile.avatar_id);
+      if (
+        anyFile.openai_realtime_secret_id !== undefined &&
+        fromFile.OPENAI_REALTIME_SECRET_ID === undefined
+      )
+        fromFile.OPENAI_REALTIME_SECRET_ID = String(
+          anyFile.openai_realtime_secret_id,
+        );
+      if (
+        anyFile.openai_realtime_model !== undefined &&
+        fromFile.OPENAI_REALTIME_MODEL === undefined
+      )
+        fromFile.OPENAI_REALTIME_MODEL = String(anyFile.openai_realtime_model);
+      if (
+        anyFile.openai_realtime_voice !== undefined &&
+        fromFile.OPENAI_REALTIME_VOICE === undefined
+      )
+        fromFile.OPENAI_REALTIME_VOICE = String(anyFile.openai_realtime_voice);
+      if (
+        anyFile.openai_realtime_temperature !== undefined &&
+        fromFile.OPENAI_REALTIME_TEMPERATURE === undefined
+      ) {
+        const v = Number(anyFile.openai_realtime_temperature);
+        if (!Number.isNaN(v)) fromFile.OPENAI_REALTIME_TEMPERATURE = v;
+      }
+      if (
+        anyFile.openai_realtime_instructions !== undefined &&
+        fromFile.OPENAI_REALTIME_INSTRUCTIONS === undefined
+      )
+        fromFile.OPENAI_REALTIME_INSTRUCTIONS = String(
+          anyFile.openai_realtime_instructions,
+        );
+      if (
+        anyFile.use_openai_realtime_for_lite !== undefined &&
+        fromFile.USE_OPENAI_REALTIME_FOR_LITE === undefined
+      )
+        fromFile.USE_OPENAI_REALTIME_FOR_LITE = Boolean(
+          anyFile.use_openai_realtime_for_lite,
+        );
     }
   } catch {
     // ignore parse errors; use defaults

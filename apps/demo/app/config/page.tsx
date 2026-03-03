@@ -15,6 +15,12 @@ type Config = {
   OPENAI_API_KEY: string;
   USE_ELEVENLABS_FOR_LITE: boolean;
   USE_OPENAI_FOR_LITE: boolean;
+  USE_OPENAI_REALTIME_FOR_LITE: boolean;
+  OPENAI_REALTIME_SECRET_ID: string;
+  OPENAI_REALTIME_MODEL: string;
+  OPENAI_REALTIME_VOICE: string;
+  OPENAI_REALTIME_TEMPERATURE: number;
+  OPENAI_REALTIME_INSTRUCTIONS: string;
 };
 
 const defaultConfig: Config = {
@@ -29,7 +35,33 @@ const defaultConfig: Config = {
   OPENAI_API_KEY: "",
   USE_ELEVENLABS_FOR_LITE: false,
   USE_OPENAI_FOR_LITE: false,
+  USE_OPENAI_REALTIME_FOR_LITE: false,
+  OPENAI_REALTIME_SECRET_ID: "",
+  OPENAI_REALTIME_MODEL: "gpt-realtime",
+  OPENAI_REALTIME_VOICE: "marin",
+  OPENAI_REALTIME_TEMPERATURE: 0.8,
+  OPENAI_REALTIME_INSTRUCTIONS: "",
 };
+
+const OPENAI_REALTIME_VOICES = [
+  { value: "alloy", label: "Alloy" },
+  { value: "ash", label: "Ash" },
+  { value: "ballad", label: "Ballad" },
+  { value: "coral", label: "Coral" },
+  { value: "echo", label: "Echo" },
+  { value: "fable", label: "Fable" },
+  { value: "onyx", label: "Onyx" },
+  { value: "nova", label: "Nova" },
+  { value: "shimmer", label: "Shimmer" },
+  { value: "sage", label: "Sage" },
+  { value: "verse", label: "Verse" },
+  { value: "marin", label: "Marin" },
+  { value: "cedar", label: "Cedar" },
+] as const;
+
+const OPENAI_REALTIME_MODELS = [
+  { value: "gpt-realtime", label: "gpt-realtime" },
+] as const;
 
 type TestState = "idle" | "testing" | "ok" | "error";
 
@@ -61,6 +93,10 @@ export default function ConfigPage() {
     { id: string; name: string; language?: string }[]
   >([]);
   const [avatars, setAvatars] = useState<{ id: string; name: string }[]>([]);
+  const [secrets, setSecrets] = useState<
+    { id: string; secret_name: string; secret_type: string }[]
+  >([]);
+  const [registerSecretLoading, setRegisterSecretLoading] = useState(false);
   const [listsLoading, setListsLoading] = useState(false);
   const [micCheck, setMicCheck] = useState<{
     state: TestState;
@@ -96,17 +132,28 @@ export default function ConfigPage() {
   useEffect(() => {
     if (loading || !config.API_KEY?.trim()) return;
     setListsLoading(true);
-    Promise.all([
+    const fetches: [
+      Promise<{ voices?: unknown[] }>,
+      Promise<{ avatars?: unknown[] }>,
+      Promise<{
+        secrets?: { id: string; secret_name: string; secret_type: string }[];
+      }>,
+    ] = [
       fetch("/api/config/voices").then((r) =>
         r.ok ? r.json() : { voices: [] },
       ),
       fetch("/api/config/avatars").then((r) =>
         r.ok ? r.json() : { avatars: [] },
       ),
-    ])
-      .then(([v, a]) => {
+      fetch("/api/config/secrets").then((r) =>
+        r.ok ? r.json() : { secrets: [] },
+      ),
+    ];
+    Promise.all(fetches)
+      .then(([v, a, s]) => {
         setVoices(v.voices ?? []);
         setAvatars(a.avatars ?? []);
+        setSecrets(s.secrets ?? []);
       })
       .catch(() => {})
       .finally(() => setListsLoading(false));
@@ -165,9 +212,46 @@ export default function ConfigPage() {
     }
   };
 
-  const update = (key: keyof Config, value: string | boolean) => {
+  const update = (key: keyof Config, value: string | boolean | number) => {
     setConfig((prev) => ({ ...prev, [key]: value }));
   };
+
+  const registerOpenAISecret = useCallback(async () => {
+    if (!config.OPENAI_API_KEY?.trim()) return;
+    setRegisterSecretLoading(true);
+    try {
+      const res = await fetch("/api/config/register-openai-secret", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          OPENAI_API_KEY: config.OPENAI_API_KEY.trim(),
+          secret_name: "OpenAI Realtime",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSaveMessage(data.error ?? `HTTP ${res.status}`);
+        setSaveStatus("error");
+        return;
+      }
+      const secretId = data.secret_id;
+      if (secretId) {
+        setConfig((prev) => ({ ...prev, OPENAI_REALTIME_SECRET_ID: secretId }));
+        const listRes = await fetch("/api/config/secrets");
+        if (listRes.ok) {
+          const listData = await listRes.json();
+          setSecrets(listData.secrets ?? []);
+        }
+        setSaveMessage("Secret registered. Select it above and save.");
+        setSaveStatus("ok");
+      }
+    } catch (e) {
+      setSaveMessage((e as Error).message);
+      setSaveStatus("error");
+    } finally {
+      setRegisterSecretLoading(false);
+    }
+  }, [config.OPENAI_API_KEY]);
 
   const checkMicrophone = useCallback(async () => {
     setMicCheck({ state: "testing" });
@@ -743,6 +827,163 @@ export default function ConfigPage() {
                           {testOpenAI.message}
                         </span>
                       )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <div className="flex items-center gap-3 mb-3">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={config.USE_OPENAI_REALTIME_FOR_LITE}
+                    onClick={() =>
+                      update(
+                        "USE_OPENAI_REALTIME_FOR_LITE",
+                        !config.USE_OPENAI_REALTIME_FOR_LITE,
+                      )
+                    }
+                    className={`relative w-11 h-6 rounded-full transition-colors ${
+                      config.USE_OPENAI_REALTIME_FOR_LITE
+                        ? "bg-blue-500"
+                        : "bg-white/20"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                        config.USE_OPENAI_REALTIME_FOR_LITE
+                          ? "translate-x-5"
+                          : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                  <label className="text-sm text-gray-300">
+                    Use OpenAI Realtime for LITE (official)
+                  </label>
+                </div>
+                <p className="text-xs text-gray-500 mb-3 ml-0">
+                  LiveAvatar runs STT, LLM, and TTS via OpenAI Realtime; avatar
+                  is lipsync only. Requires registering your OpenAI key as a
+                  LiveAvatar secret below.
+                </p>
+                {config.USE_OPENAI_REALTIME_FOR_LITE && (
+                  <div className="ml-0 space-y-4 pl-0 border border-white/10 rounded-md p-4">
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">
+                        OpenAI secret (LiveAvatar)
+                      </label>
+                      {listsLoading ? (
+                        <p className="text-xs text-gray-500">
+                          Loading secrets…
+                        </p>
+                      ) : (
+                        <select
+                          value={config.OPENAI_REALTIME_SECRET_ID}
+                          onChange={(e) =>
+                            update("OPENAI_REALTIME_SECRET_ID", e.target.value)
+                          }
+                          className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
+                        >
+                          <option value="">— Select secret —</option>
+                          {secrets.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.secret_name} ({s.id.slice(0, 8)}…)
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      <p className="text-xs text-gray-500 mt-1">
+                        Register your OpenAI API key with LiveAvatar, then
+                        select it. Use the key field under “Use OpenAI for LITE
+                        (chat)” above when registering.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={registerOpenAISecret}
+                        disabled={
+                          registerSecretLoading ||
+                          !config.OPENAI_API_KEY?.trim()
+                        }
+                        className="mt-2 px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+                      >
+                        {registerSecretLoading
+                          ? "Registering…"
+                          : "Register OpenAI key with LiveAvatar"}
+                      </button>
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">
+                        Realtime model
+                      </label>
+                      <select
+                        value={config.OPENAI_REALTIME_MODEL}
+                        onChange={(e) =>
+                          update("OPENAI_REALTIME_MODEL", e.target.value)
+                        }
+                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
+                      >
+                        {OPENAI_REALTIME_MODELS.map((m) => (
+                          <option key={m.value} value={m.value}>
+                            {m.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">
+                        Voice
+                      </label>
+                      <select
+                        value={config.OPENAI_REALTIME_VOICE}
+                        onChange={(e) =>
+                          update("OPENAI_REALTIME_VOICE", e.target.value)
+                        }
+                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
+                      >
+                        {OPENAI_REALTIME_VOICES.map((v) => (
+                          <option key={v.value} value={v.value}>
+                            {v.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">
+                        Temperature (0.6–1.2)
+                      </label>
+                      <input
+                        type="number"
+                        min={0.6}
+                        max={1.2}
+                        step={0.1}
+                        value={config.OPENAI_REALTIME_TEMPERATURE}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (!Number.isNaN(v))
+                            update("OPENAI_REALTIME_TEMPERATURE", v);
+                        }}
+                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">
+                        Instructions (optional)
+                      </label>
+                      <textarea
+                        value={config.OPENAI_REALTIME_INSTRUCTIONS}
+                        onChange={(e) =>
+                          update("OPENAI_REALTIME_INSTRUCTIONS", e.target.value)
+                        }
+                        rows={3}
+                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                        placeholder="System prompt for the Realtime model. Stored locally only; not sent to LiveAvatar until they support it."
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Stored for future use. LiveAvatar’s API does not yet
+                        accept instructions in the session; we will send it when
+                        supported.
+                      </p>
                     </div>
                   </div>
                 )}

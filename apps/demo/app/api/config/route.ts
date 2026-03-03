@@ -17,6 +17,12 @@ function validateBody(body: unknown): body is Config {
   if (typeof o.OPENAI_API_KEY !== "string") return false;
   if (typeof o.USE_ELEVENLABS_FOR_LITE !== "boolean") return false;
   if (typeof o.USE_OPENAI_FOR_LITE !== "boolean") return false;
+  if (typeof o.USE_OPENAI_REALTIME_FOR_LITE !== "boolean") return false;
+  if (typeof o.OPENAI_REALTIME_SECRET_ID !== "string") return false;
+  if (typeof o.OPENAI_REALTIME_MODEL !== "string") return false;
+  if (typeof o.OPENAI_REALTIME_VOICE !== "string") return false;
+  if (typeof o.OPENAI_REALTIME_TEMPERATURE !== "number") return false;
+  if (typeof o.OPENAI_REALTIME_INSTRUCTIONS !== "string") return false;
   return true;
 }
 

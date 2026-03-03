@@ -8,6 +8,66 @@ import { SessionInteractivityMode } from "@heygen/liveavatar-web-sdk";
 
 export type SessionMode = "FULL" | "FULL_PTT" | "LITE";
 
+async function ensureMicrophoneAccess(): Promise<
+  { ok: true } | { ok: false; error: string }
+> {
+  if (
+    typeof navigator === "undefined" ||
+    !navigator.mediaDevices?.getUserMedia
+  ) {
+    return {
+      ok: false,
+      error: "Microphone access is not supported in this browser.",
+    };
+  }
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const hasAudioInput = devices.some((d) => d.kind === "audioinput");
+    if (!hasAudioInput) {
+      return {
+        ok: false,
+        error: "No microphone found. Please connect a microphone to start.",
+      };
+    }
+  } catch {
+    // enumerateDevices can fail; continue and let getUserMedia be the final check
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((track) => track.stop());
+    return { ok: true };
+  } catch (e: unknown) {
+    const name = e instanceof Error ? e.name : "";
+    const message = e instanceof Error ? e.message : String(e);
+    if (
+      name === "NotAllowedError" ||
+      message.toLowerCase().includes("permission")
+    ) {
+      return {
+        ok: false,
+        error:
+          "Microphone access was denied. Please allow microphone access to start the avatar.",
+      };
+    }
+    if (
+      name === "NotFoundError" ||
+      message.toLowerCase().includes("not found")
+    ) {
+      return {
+        ok: false,
+        error: "No microphone found. Please connect a microphone to start.",
+      };
+    }
+    return {
+      ok: false,
+      error:
+        "Microphone is not available. Please check your device and try again.",
+    };
+  }
+}
+
 export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
   const [sessionToken, setSessionToken] = useState("");
   const [mode, setMode] = useState<SessionMode>("FULL");
@@ -15,8 +75,15 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
   const [isLoadingToken, setIsLoadingToken] = useState(false);
 
   const handleStartFullSession = async (pushToTalk: boolean = false) => {
-    setIsLoadingToken(true);
     setError(null);
+
+    const mic = await ensureMicrophoneAccess();
+    if (!mic.ok) {
+      setError(mic.error);
+      return;
+    }
+
+    setIsLoadingToken(true);
 
     try {
       const res = await fetch("/api/start-session", {
@@ -44,8 +111,15 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
   };
 
   const handleStartLiteSession = async () => {
-    setIsLoadingToken(true);
     setError(null);
+
+    const mic = await ensureMicrophoneAccess();
+    if (!mic.ok) {
+      setError(mic.error);
+      return;
+    }
+
+    setIsLoadingToken(true);
 
     try {
       const res = await fetch("/api/start-lite-session", { method: "POST" });
@@ -91,7 +165,10 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
 
           {error && (
             <div className="error-message">
-              {"Error getting session token: " + error}
+              {error.startsWith("Microphone") ||
+              error.startsWith("No microphone")
+                ? error
+                : "Error getting session token: " + error}
             </div>
           )}
 
