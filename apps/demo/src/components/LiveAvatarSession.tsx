@@ -7,6 +7,8 @@ import {
   useTextChat,
   useVoiceChat,
   useTrueLiteRealtime,
+  useIaraVoiceWs,
+  useIaraVoiceApi,
   useLiveAvatarContext,
 } from "../liveavatar";
 import { SessionState, VoiceChatConfig } from "@heygen/liveavatar-web-sdk";
@@ -31,10 +33,40 @@ const Button: React.FC<{
   );
 };
 
+function resolveIaraVoiceWsUrl(
+  iaraWsUrl?: string,
+  iaraApiUrl?: string,
+): string {
+  const direct = (iaraWsUrl ?? "").trim();
+  if (direct) return direct;
+
+  const api = (iaraApiUrl ?? "").trim();
+  if (!api) return "";
+
+  const noTrailing = api.replace(/\/$/, "");
+  if (noTrailing.endsWith("/api/voice/ws")) return noTrailing;
+  if (noTrailing.endsWith("/api/voice")) {
+    const base = noTrailing.slice(0, -"/api/voice".length);
+    return base.replace(/^http(s?):\/\//, "ws$1://") + "/api/voice/ws";
+  }
+  return noTrailing.replace(/^http(s?):\/\//, "ws$1://") + "/api/voice/ws";
+}
+
 const LiveAvatarSessionComponent: React.FC<{
   mode: SessionMode;
   onSessionStopped: () => void;
-}> = ({ mode, onSessionStopped }) => {
+  iaraWsUrl?: string;
+  iaraApiUrl?: string;
+  iaraSystemPrompt?: string;
+  iaraPresetId?: string;
+}> = ({
+  mode,
+  onSessionStopped,
+  iaraWsUrl,
+  iaraApiUrl,
+  iaraSystemPrompt,
+  iaraPresetId,
+}) => {
   const [message, setMessage] = useState("");
   const {
     sessionState,
@@ -46,7 +78,24 @@ const LiveAvatarSessionComponent: React.FC<{
     attachElement,
   } = useSession();
   const { sessionRef } = useLiveAvatarContext();
+  const wsEnabled = process.env.NEXT_PUBLIC_IARA_USE_VOICE_WS !== "false";
+  const resolvedIaraVoiceWsUrl = resolveIaraVoiceWsUrl(iaraWsUrl, iaraApiUrl);
   useTrueLiteRealtime(mode === "LITE_TRUE", sessionRef, sessionState);
+  useIaraVoiceWs(
+    mode === "LITE_IARA" && wsEnabled && !!resolvedIaraVoiceWsUrl,
+    resolvedIaraVoiceWsUrl,
+    sessionRef,
+    sessionState,
+    iaraSystemPrompt,
+    iaraPresetId,
+  );
+  useIaraVoiceApi(
+    mode === "LITE_IARA" &&
+      (!wsEnabled || !resolvedIaraVoiceWsUrl) &&
+      !!iaraApiUrl,
+    sessionRef,
+    sessionState,
+  );
   const {
     isAvatarTalking,
     isUserTalking,
@@ -62,15 +111,23 @@ const LiveAvatarSessionComponent: React.FC<{
     error: voiceChatError,
   } = useVoiceChat();
 
-  // For useAvatarActions, treat FULL_PTT as FULL and LITE_TRUE as LITE
+  // For useAvatarActions, treat FULL_PTT as FULL and LITE_TRUE/LITE_IARA as LITE
   const avatarActionsMode =
-    mode === "FULL_PTT" ? "FULL" : mode === "LITE_TRUE" ? "LITE" : mode;
+    mode === "FULL_PTT"
+      ? "FULL"
+      : mode === "LITE_TRUE" || mode === "LITE_IARA"
+        ? "LITE"
+        : mode;
   const { interrupt, repeat, startListening, stopListening } =
     useAvatarActions(avatarActionsMode);
 
-  // For useTextChat, treat FULL_PTT as FULL and LITE_TRUE as LITE
+  // For useTextChat, treat FULL_PTT as FULL and LITE_TRUE/LITE_IARA as LITE
   const textChatMode =
-    mode === "FULL_PTT" ? "FULL" : mode === "LITE_TRUE" ? "LITE" : mode;
+    mode === "FULL_PTT"
+      ? "FULL"
+      : mode === "LITE_TRUE" || mode === "LITE_IARA"
+        ? "LITE"
+        : mode;
   const { sendMessage } = useTextChat(textChatMode);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -240,12 +297,20 @@ export const LiveAvatarSession: React.FC<{
   sessionAccessToken: string;
   onSessionStopped: () => void;
   voiceChatConfig?: boolean | VoiceChatConfig;
+  iaraWsUrl?: string;
+  iaraApiUrl?: string;
+  iaraSystemPrompt?: string;
+  iaraPresetId?: string;
 }> = ({
   apiUrl,
   mode,
   sessionAccessToken,
   onSessionStopped,
   voiceChatConfig = true,
+  iaraWsUrl,
+  iaraApiUrl,
+  iaraSystemPrompt,
+  iaraPresetId,
 }) => {
   return (
     <LiveAvatarContextProvider
@@ -256,6 +321,10 @@ export const LiveAvatarSession: React.FC<{
       <LiveAvatarSessionComponent
         mode={mode}
         onSessionStopped={onSessionStopped}
+        iaraWsUrl={iaraWsUrl}
+        iaraApiUrl={iaraApiUrl}
+        iaraSystemPrompt={iaraSystemPrompt}
+        iaraPresetId={iaraPresetId}
       />
     </LiveAvatarContextProvider>
   );

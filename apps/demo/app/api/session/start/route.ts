@@ -16,7 +16,7 @@ const OPENAI_REALTIME_VOICES = [
   "cedar",
 ] as const;
 
-type StartMode = "FULL" | "FULL_PTT" | "LITE" | "LITE_TRUE";
+type StartMode = "FULL" | "FULL_PTT" | "LITE" | "LITE_TRUE" | "LITE_IARA";
 
 function getStartMode(config: ReturnType<typeof getConfig>): {
   mode: StartMode | null;
@@ -31,6 +31,9 @@ function getStartMode(config: ReturnType<typeof getConfig>): {
       config.OPENAI_API_KEY?.trim() ||
       "") as string
   ).trim();
+  const iaraWsUrl = (config.IARA_WS_URL ?? "").trim();
+  const iaraApiUrl = (config.IARA_API_URL ?? "").trim();
+  const hasIaraUrl = iaraWsUrl.length > 0 || iaraApiUrl.length > 0;
 
   const fullReady =
     config.USE_FULL_MODE &&
@@ -44,6 +47,9 @@ function getStartMode(config: ReturnType<typeof getConfig>): {
     apiKey.length > 0 &&
     avatarId.length > 0 &&
     openaiKey.length > 0;
+
+  const iaraReady =
+    config.USE_IARA && apiKey.length > 0 && avatarId.length > 0 && hasIaraUrl;
 
   const liteRealtimeReady =
     config.USE_OPENAI_REALTIME_FOR_LITE &&
@@ -61,6 +67,9 @@ function getStartMode(config: ReturnType<typeof getConfig>): {
   }
   if (trueLiteReady) {
     return { mode: "LITE_TRUE", error: null };
+  }
+  if (iaraReady) {
+    return { mode: "LITE_IARA", error: null };
   }
   if (liteReady) {
     return { mode: "LITE", error: null };
@@ -87,6 +96,18 @@ function getStartMode(config: ReturnType<typeof getConfig>): {
       return {
         mode: null,
         error: "True LITE: set OpenAI API key in Settings (for ephemeral key).",
+      };
+  } else if (config.USE_IARA) {
+    if (!apiKey || !avatarId)
+      return {
+        mode: null,
+        error: "Set LiveAvatar API key and Avatar ID in Settings (/config).",
+      };
+    if (!hasIaraUrl)
+      return {
+        mode: null,
+        error:
+          "iara: set WebSocket URL or Voice API URL in Settings (/config).",
       };
   } else if (config.USE_OPENAI_REALTIME_FOR_LITE) {
     if (!apiKey || !avatarId)
@@ -121,6 +142,8 @@ export async function POST() {
   const apiKey = config.API_KEY.trim();
   const avatarId = config.AVATAR_ID.trim();
   const apiUrl = (config.API_URL ?? "").trim() || "https://api.liveavatar.com";
+  const iaraWsUrl = (config.IARA_WS_URL ?? "").trim();
+  const iaraApiUrl = (config.IARA_API_URL ?? "").trim();
 
   let session_token = "";
   let session_id = "";
@@ -175,7 +198,7 @@ export async function POST() {
       session_token = data.data?.session_token ?? "";
       session_id = data.data?.session_id ?? "";
     } else {
-      // LITE or LITE_TRUE: request LiveAvatar token. LITE_TRUE = we manage Realtime (no openai_realtime_config).
+      // LITE, LITE_TRUE, or LITE_IARA: request LiveAvatar token. LITE_TRUE/LITE_IARA = we manage voice (no openai_realtime_config).
       const useRealtime =
         mode === "LITE" &&
         config.USE_OPENAI_REALTIME_FOR_LITE &&
@@ -264,7 +287,25 @@ export async function POST() {
     );
   }
 
-  return new Response(JSON.stringify({ session_token, session_id, mode }), {
+  const body: {
+    session_token: string;
+    session_id: string;
+    mode: StartMode;
+    iara_ws_url?: string;
+    iara_api_url?: string;
+    iara_system_prompt?: string;
+    iara_preset_id?: string;
+  } = { session_token, session_id, mode };
+  if (mode === "LITE_IARA") {
+    if (iaraWsUrl) body.iara_ws_url = iaraWsUrl;
+    if (iaraApiUrl) body.iara_api_url = iaraApiUrl;
+    const prompt = (config.IARA_SYSTEM_PROMPT ?? "").trim();
+    if (prompt) body.iara_system_prompt = prompt;
+    const presetId = (config.IARA_PRESET_ID ?? "").trim();
+    if (presetId) body.iara_preset_id = presetId;
+  }
+
+  return new Response(JSON.stringify(body), {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });

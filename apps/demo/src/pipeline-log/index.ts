@@ -5,6 +5,7 @@ export {
   logOpenAI,
   logLiveAvatar,
   logOrchestrator,
+  logIara,
 } from "./store";
 export { usePipelineLog } from "./usePipelineLog";
 export type {

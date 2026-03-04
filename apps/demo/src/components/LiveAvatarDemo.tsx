@@ -9,20 +9,29 @@ import { PipelineLogViewer } from "./PipelineLogViewer";
 import { SessionInteractivityMode } from "@heygen/liveavatar-web-sdk";
 import { logOrchestrator } from "../pipeline-log";
 
-export type SessionMode = "FULL" | "FULL_PTT" | "LITE" | "LITE_TRUE";
+export type SessionMode =
+  | "FULL"
+  | "FULL_PTT"
+  | "LITE"
+  | "LITE_TRUE"
+  | "LITE_IARA";
 
 type ConfigSummary = {
   fullReady: boolean;
   liteReady: boolean;
   trueLiteReady?: boolean;
-  liteProvider: "openai_realtime" | "true_lite" | null;
-  startMode: "FULL" | "FULL_PTT" | "LITE" | "LITE_TRUE" | null;
+  iaraReady?: boolean;
+  liteProvider: "openai_realtime" | "true_lite" | "iara" | null;
+  startMode: "FULL" | "FULL_PTT" | "LITE" | "LITE_TRUE" | "LITE_IARA" | null;
   error: string | null;
   useFullMode: boolean;
   useLiteRealtime: boolean;
   useTrueLite?: boolean;
+  useIara?: boolean;
   hasApiKey: boolean;
   hasAvatarId: boolean;
+  iaraWsUrl?: string | null;
+  iaraApiUrl?: string | null;
 };
 
 async function ensureMicrophoneAccess(): Promise<
@@ -90,12 +99,14 @@ function formatStartMode(mode: ConfigSummary["startMode"]): string {
   if (mode === "FULL_PTT") return "Full (push to talk)";
   if (mode === "LITE") return "Lite (LiveAvatar-managed)";
   if (mode === "LITE_TRUE") return "True Lite";
+  if (mode === "LITE_IARA") return "Lite (iara)";
   return "—";
 }
 
 function formatLiteProvider(summary: ConfigSummary): string {
   if (summary.liteProvider === "true_lite")
     return "True LITE (we manage Realtime)";
+  if (summary.liteProvider === "iara") return "iara (local voice)";
   if (summary.liteProvider === "openai_realtime")
     return "OpenAI Realtime (LiveAvatar-managed)";
   return "—";
@@ -104,6 +115,10 @@ function formatLiteProvider(summary: ConfigSummary): string {
 export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
   const [sessionToken, setSessionToken] = useState("");
   const [mode, setMode] = useState<SessionMode>("FULL");
+  const [iaraWsUrl, setIaraWsUrl] = useState("");
+  const [iaraApiUrl, setIaraApiUrl] = useState("");
+  const [iaraSystemPrompt, setIaraSystemPrompt] = useState("");
+  const [iaraPresetId, setIaraPresetId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isLoadingToken, setIsLoadingToken] = useState(false);
   const [summary, setSummary] = useState<ConfigSummary | null>(null);
@@ -207,6 +222,10 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
         session_token?: string;
         mode?: string;
         error?: string;
+        iara_ws_url?: string;
+        iara_api_url?: string;
+        iara_system_prompt?: string;
+        iara_preset_id?: string;
       };
 
       if (!res.ok) {
@@ -223,10 +242,22 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
       const resolvedMode: SessionMode =
         data.mode === "FULL_PTT" ||
         data.mode === "LITE" ||
-        data.mode === "LITE_TRUE"
+        data.mode === "LITE_TRUE" ||
+        data.mode === "LITE_IARA"
           ? data.mode
           : "FULL";
       setMode(resolvedMode);
+      if (resolvedMode === "LITE_IARA") {
+        setIaraWsUrl(data.iara_ws_url ?? "");
+        setIaraApiUrl(data.iara_api_url ?? "");
+        setIaraSystemPrompt(data.iara_system_prompt ?? "");
+        setIaraPresetId(data.iara_preset_id ?? "");
+      } else {
+        setIaraWsUrl("");
+        setIaraApiUrl("");
+        setIaraSystemPrompt("");
+        setIaraPresetId("");
+      }
       setIsLoadingToken(false);
       logOrchestrator("Session token received, starting LiveAvatar", "info", {
         mode: resolvedMode,
@@ -247,7 +278,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
   }, []);
 
   const voiceChatConfig = useMemo(() => {
-    if (mode === "LITE_TRUE") return false; // We send mic to OpenAI only; no voice chat to LiveAvatar
+    if (mode === "LITE_TRUE" || mode === "LITE_IARA") return false; // We send mic to OpenAI/iara only; no voice chat to LiveAvatar
     if (mode === "FULL_PTT") {
       return { mode: SessionInteractivityMode.PUSH_TO_TALK };
     }
@@ -278,19 +309,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
           <div className="idle-background" />
 
           {/* Overview */}
-          <div
-            className="overview-panel"
-            style={{
-              marginBottom: 24,
-              padding: "16px 20px",
-              background: "rgba(0,0,0,0.4)",
-              borderRadius: 12,
-              maxWidth: 420,
-              width: "100%",
-              textAlign: "left",
-              border: "1px solid rgba(255,255,255,0.15)",
-            }}
-          >
+          <div className="overview-panel">
             <div
               style={{
                 fontSize: 14,
@@ -306,14 +325,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
                 <button
                   type="button"
                   onClick={() => refreshSummary()}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "rgba(255,255,255,0.7)",
-                    fontSize: 12,
-                    cursor: "pointer",
-                    textDecoration: "underline",
-                  }}
+                  className="overview-refresh-btn"
                 >
                   Refresh
                 </button>
@@ -339,7 +351,8 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
                     : "Not configured"}
                 </li>
                 {(summary.startMode === "LITE" ||
-                  summary.startMode === "LITE_TRUE") &&
+                  summary.startMode === "LITE_TRUE" ||
+                  summary.startMode === "LITE_IARA") &&
                   summary.liteProvider && (
                     <li style={{ marginBottom: 6 }}>
                       <strong>Lite provider:</strong>{" "}
@@ -394,7 +407,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
             </div>
           )}
 
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col items-center gap-5">
             <button
               onClick={handleStart}
               disabled={!canStart || summaryLoading}
@@ -406,14 +419,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
             >
               Iniciar conversa
             </button>
-            <Link
-              href="/config"
-              style={{
-                fontSize: 14,
-                color: "rgba(255,255,255,0.8)",
-                textDecoration: "none",
-              }}
-            >
+            <Link href="/config" className="idle-settings-link">
               Settings
             </Link>
           </div>
@@ -430,6 +436,14 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
             sessionAccessToken={sessionToken}
             voiceChatConfig={voiceChatConfig}
             onSessionStopped={onSessionStopped}
+            iaraWsUrl={mode === "LITE_IARA" ? iaraWsUrl : undefined}
+            iaraApiUrl={mode === "LITE_IARA" ? iaraApiUrl : undefined}
+            iaraSystemPrompt={
+              mode === "LITE_IARA" ? iaraSystemPrompt || undefined : undefined
+            }
+            iaraPresetId={
+              mode === "LITE_IARA" ? iaraPresetId || undefined : undefined
+            }
           />
         </div>
       )}

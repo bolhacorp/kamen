@@ -11,6 +11,7 @@ const SOURCE_COLORS: Record<PipelineLogSource, string> = {
   openai: "rgb(16 185 129)", // green
   liveavatar: "rgb(59 130 246)", // blue
   orchestrator: "rgb(168 85 247)", // purple
+  iara: "rgb(234 179 8)", // amber
 };
 
 const LEVEL_COLORS: Record<PipelineLogLevel, string> = {
@@ -36,7 +37,7 @@ export const PipelineLogViewer: React.FC = () => {
   const [levelFilter, setLevelFilter] = useState<PipelineLogLevel | "all">(
     "all",
   );
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [collapsedIds, setCollapsedIds] = useState<Record<string, boolean>>({});
 
   const filtered = useMemo(() => {
     return entries.filter((e) => {
@@ -60,11 +61,11 @@ export const PipelineLogViewer: React.FC = () => {
 
   return (
     <div
-      className="fixed bottom-14 right-4 z-[100] flex flex-col rounded-lg overflow-hidden border border-white/20 shadow-xl"
+      className="fixed top-0 right-0 z-[100] flex flex-col overflow-hidden border border-white/20 shadow-xl"
       style={{
         background: "rgb(17 24 39)",
-        width: "min(480px, 92vw)",
-        maxHeight: "min(55vh, 420px)",
+        width: "min(560px, 96vw)",
+        height: "100vh",
       }}
     >
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/10 flex-shrink-0">
@@ -81,6 +82,7 @@ export const PipelineLogViewer: React.FC = () => {
             <option value="openai">OpenAI</option>
             <option value="liveavatar">LiveAvatar</option>
             <option value="orchestrator">Orchestrator</option>
+            <option value="iara">iara</option>
           </select>
           <select
             value={levelFilter}
@@ -132,9 +134,12 @@ export const PipelineLogViewer: React.FC = () => {
                 <button
                   type="button"
                   className="w-full text-left"
-                  onClick={() =>
-                    setExpandedId((id) => (id === entry.id ? null : entry.id))
-                  }
+                  onClick={() => {
+                    setCollapsedIds((prev) => ({
+                      ...prev,
+                      [entry.id]: !prev[entry.id],
+                    }));
+                  }}
                 >
                   <span className="text-gray-500 mr-2">
                     {formatTime(entry.ts)}
@@ -154,11 +159,11 @@ export const PipelineLogViewer: React.FC = () => {
                   <span className="text-gray-200">{entry.message}</span>
                   {entry.detail && Object.keys(entry.detail).length > 0 && (
                     <span className="text-gray-500 ml-1">
-                      {expandedId === entry.id ? " ▼" : " ▶"}
+                      {collapsedIds[entry.id] ? " ▶" : " ▼"}
                     </span>
                   )}
                 </button>
-                {expandedId === entry.id && entry.detail && (
+                {!collapsedIds[entry.id] && entry.detail && (
                   <pre className="mt-1 p-2 rounded bg-black/40 text-gray-300 overflow-x-auto whitespace-pre-wrap break-all">
                     {JSON.stringify(entry.detail, null, 2)}
                   </pre>

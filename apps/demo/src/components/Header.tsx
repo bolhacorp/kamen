@@ -10,7 +10,7 @@ export const Header: React.FC = () => {
         <div className="logo-placeholder"></div>
       </div>
       <div className="kamen-logo">
-        <div className="kamen-placeholder"></div>
+        <span className="kamen-title">KAMEN</span>
       </div>
       <div className="flex items-center gap-3">
         <Link

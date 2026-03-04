@@ -1,4 +1,8 @@
-export type PipelineLogSource = "openai" | "liveavatar" | "orchestrator";
+export type PipelineLogSource =
+  | "openai"
+  | "liveavatar"
+  | "orchestrator"
+  | "iara";
 export type PipelineLogLevel = "debug" | "info" | "warn" | "error";
 
 export interface PipelineLogEntry {

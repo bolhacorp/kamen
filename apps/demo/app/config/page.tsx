@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { logIara } from "../../src/pipeline-log";
 
 type Config = {
   API_KEY: string;
@@ -26,6 +27,11 @@ type Config = {
   OPENAI_REALTIME_VOICE: string;
   OPENAI_REALTIME_TEMPERATURE: number;
   OPENAI_REALTIME_INSTRUCTIONS: string;
+  USE_IARA: boolean;
+  IARA_WS_URL: string;
+  IARA_API_URL: string;
+  IARA_SYSTEM_PROMPT: string;
+  IARA_PRESET_ID: string;
 };
 
 const defaultConfig: Config = {
@@ -51,6 +57,11 @@ const defaultConfig: Config = {
   OPENAI_REALTIME_VOICE: "marin",
   OPENAI_REALTIME_TEMPERATURE: 0.8,
   OPENAI_REALTIME_INSTRUCTIONS: "",
+  USE_IARA: false,
+  IARA_WS_URL: "",
+  IARA_API_URL: "",
+  IARA_SYSTEM_PROMPT: "",
+  IARA_PRESET_ID: "",
 };
 
 const OPENAI_REALTIME_VOICES = [
@@ -100,6 +111,18 @@ export default function ConfigPage() {
     message?: string;
   }>({ state: "idle" });
   const [testOpenAI, setTestOpenAI] = useState<{
+    state: TestState;
+    message?: string;
+  }>({ state: "idle" });
+  const [testIaraServer, setTestIaraServer] = useState<{
+    state: TestState;
+    message?: string;
+  }>({ state: "idle" });
+  const [testIaraBrowser, setTestIaraBrowser] = useState<{
+    state: TestState;
+    message?: string;
+  }>({ state: "idle" });
+  const [testIaraVoice, setTestIaraVoice] = useState<{
     state: TestState;
     message?: string;
   }>({ state: "idle" });
@@ -330,6 +353,217 @@ export default function ConfigPage() {
     }
   }, []);
 
+  const resolveIaraVoiceWsUrl = useCallback(() => {
+    const direct = (config.IARA_WS_URL ?? "").trim();
+    if (direct) return direct;
+    const api = (config.IARA_API_URL ?? "").trim();
+    if (!api) return "";
+    const noTrailing = api.replace(/\/$/, "");
+    if (noTrailing.endsWith("/api/voice/ws")) return noTrailing;
+    if (noTrailing.endsWith("/api/voice")) {
+      const base = noTrailing.slice(0, -"/api/voice".length);
+      return base.replace(/^http(s?):\/\//, "ws$1://") + "/api/voice/ws";
+    }
+    return noTrailing.replace(/^http(s?):\/\//, "ws$1://") + "/api/voice/ws";
+  }, [config.IARA_WS_URL, config.IARA_API_URL]);
+
+  const makeTestTonePcm = useCallback(() => {
+    const sampleRate = 24_000;
+    const durationSec = 0.35;
+    const samples = Math.floor(sampleRate * durationSec);
+    const out = new Uint8Array(samples * 2);
+    const view = new DataView(out.buffer);
+    for (let i = 0; i < samples; i++) {
+      const t = i / sampleRate;
+      const s = Math.sin(2 * Math.PI * 440 * t) * 0.2;
+      view.setInt16(i * 2, Math.round(s * 0x7fff), true);
+    }
+    return out;
+  }, []);
+
+  const testIaraBrowserWs = useCallback(async () => {
+    const url = resolveIaraVoiceWsUrl();
+    if (!url) {
+      setTestIaraBrowser({
+        state: "error",
+        message: "Set iara WebSocket URL or Voice API URL first.",
+      });
+      logIara("Config test (browser): no URL", "warn");
+      return;
+    }
+    setTestIaraBrowser({ state: "testing" });
+    const sessionId = `cfg-${Date.now()}`;
+    const pcm = makeTestTonePcm();
+    const commit: Record<string, unknown> = {
+      type: "turn.commit",
+      session_id: sessionId,
+    };
+    const prompt = (config.IARA_SYSTEM_PROMPT ?? "").trim();
+    if (prompt) commit.system_prompt = prompt;
+    const presetId = (config.IARA_PRESET_ID ?? "").trim();
+    if (presetId) commit.preset_id = presetId;
+
+    logIara("Config test (browser): starting", "info", {
+      url,
+      sessionId,
+      audioBytes: pcm.byteLength,
+    });
+
+    let ws: WebSocket | null = null;
+    let done = false;
+    let sawSessionReady = false;
+    let sawError = false;
+    let lastTextFrame: string | null = null;
+    const finish = (result: { state: TestState; message?: string }) => {
+      if (done) return;
+      done = true;
+      setTestIaraBrowser(result);
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ action: "stop" }));
+        }
+      } catch {
+        // ignore
+      }
+      try {
+        ws?.close();
+      } catch {
+        // ignore
+      }
+    };
+
+    const timeout = window.setTimeout(() => {
+      logIara("Config test (browser): timeout", "warn", {
+        sawSessionReady,
+        sawError,
+        lastTextFrame: lastTextFrame?.slice(0, 400),
+      });
+      const extra = [
+        sawSessionReady ? "saw session_ready" : null,
+        sawError ? "saw error" : null,
+        lastTextFrame
+          ? `last text frame: ${lastTextFrame.slice(0, 500)}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("; ");
+      finish({
+        state: "error",
+        message: `Timed out waiting for turn events.${extra ? " " + extra : ""}`,
+      });
+    }, 5000);
+
+    try {
+      ws = new WebSocket(url);
+      ws.onopen = () => {
+        logIara("Config test (browser): WebSocket open", "info", { sessionId });
+        try {
+          ws?.send(pcm.buffer);
+          ws?.send(JSON.stringify(commit));
+          logIara(
+            "Config test (browser): sent audio.append(binary)+turn.commit",
+            "info",
+            {
+              sessionId,
+              audioBytes: pcm.byteLength,
+              commit,
+            },
+          );
+        } catch (e) {
+          window.clearTimeout(timeout);
+          finish({
+            state: "error",
+            message: e instanceof Error ? e.message : String(e),
+          });
+        }
+      };
+      ws.onmessage = (ev) => {
+        if (typeof ev.data !== "string") return;
+        lastTextFrame = ev.data;
+        logIara("Config test (browser): text frame", "debug", {
+          length: ev.data.length,
+          preview: ev.data.slice(0, 200),
+        });
+        try {
+          const data = JSON.parse(ev.data) as {
+            type?: string;
+            message?: string;
+            code?: string;
+          };
+          if (data?.type === "session_ready") {
+            // backward compatibility for old server contracts
+            sawSessionReady = true;
+            logIara("Config test (browser): session_ready", "info");
+            window.clearTimeout(timeout);
+            finish({ state: "ok", message: "session_ready received" });
+          } else if (
+            data?.type === "turn.started" ||
+            data?.type === "tts.audio" ||
+            data?.type === "turn.completed" ||
+            data?.type === "stt.final"
+          ) {
+            window.clearTimeout(timeout);
+            finish({ state: "ok", message: `received ${data.type}` });
+          } else if (data?.type === "error") {
+            sawError = true;
+            logIara("Config test (browser): error frame", "error", {
+              message: data?.message,
+              code: data?.code,
+            });
+            window.clearTimeout(timeout);
+            const msg = data?.message ?? "Unknown iara error";
+            const code = data?.code ? ` (${data.code})` : "";
+            finish({ state: "error", message: `${msg}${code}` });
+          } else {
+            logIara("Config test (browser): unknown type", "debug", {
+              type: data?.type,
+            });
+          }
+        } catch {
+          // ignore non-json
+        }
+      };
+      ws.onerror = () => {
+        logIara("Config test (browser): WebSocket error event", "error");
+      };
+      ws.onclose = (ev) => {
+        if (done) return;
+        logIara("Config test (browser): WebSocket closed", "info", {
+          code: ev.code,
+          reason: ev.reason,
+          wasClean: ev.wasClean,
+          lastTextFrame: lastTextFrame?.slice(0, 300),
+        });
+        window.clearTimeout(timeout);
+        const extra = [
+          `code=${ev.code}`,
+          ev.reason ? `reason=${JSON.stringify(ev.reason)}` : null,
+          `wasClean=${ev.wasClean}`,
+          lastTextFrame
+            ? `last text frame: ${lastTextFrame.slice(0, 500)}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join("; ");
+        finish({
+          state: "error",
+          message: `WebSocket closed before receiving turn events. ${extra}`,
+        });
+      };
+    } catch (e) {
+      window.clearTimeout(timeout);
+      logIara("Config test (browser): exception", "error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      finish({ state: "error", message: (e as Error).message });
+    }
+  }, [
+    resolveIaraVoiceWsUrl,
+    makeTestTonePcm,
+    config.IARA_SYSTEM_PROMPT,
+    config.IARA_PRESET_ID,
+  ]);
+
   const runTest = async (
     endpoint: string,
     body: Record<string, unknown>,
@@ -354,6 +588,99 @@ export default function ConfigPage() {
       setResult({ state: "error", message: (e as Error).message });
     }
   };
+
+  const testIaraServerWs = useCallback(async () => {
+    setTestIaraServer({ state: "testing" });
+    try {
+      const res = await fetch("/api/config/test/iara", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          IARA_WS_URL: config.IARA_WS_URL,
+          IARA_API_URL: config.IARA_API_URL,
+          IARA_SYSTEM_PROMPT: config.IARA_SYSTEM_PROMPT,
+          IARA_PRESET_ID: config.IARA_PRESET_ID,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        error?: string;
+        detail?: {
+          closeCode?: number;
+          closeReason?: string;
+          wasClean?: boolean;
+          lastTextFrame?: string | null;
+        };
+      };
+      if (data.success) {
+        setTestIaraServer({ state: "ok", message: "turn events received" });
+      } else {
+        const parts = [data.error ?? "Test failed"];
+        if (data.detail) {
+          const d = data.detail;
+          const detailParts: string[] = [];
+          if (d.closeCode != null) detailParts.push(`code=${d.closeCode}`);
+          if (d.closeReason) detailParts.push(`reason=${d.closeReason}`);
+          if (d.lastTextFrame)
+            detailParts.push(`last frame: ${d.lastTextFrame.slice(0, 400)}`);
+          if (detailParts.length) parts.push(detailParts.join("; "));
+        }
+        setTestIaraServer({
+          state: "error",
+          message: parts.join(" — "),
+        });
+      }
+    } catch (e) {
+      setTestIaraServer({
+        state: "error",
+        message: (e as Error).message,
+      });
+    }
+  }, [
+    config.IARA_WS_URL,
+    config.IARA_API_URL,
+    config.IARA_SYSTEM_PROMPT,
+    config.IARA_PRESET_ID,
+  ]);
+
+  const testIaraVoiceApi = useCallback(async () => {
+    setTestIaraVoice({ state: "testing" });
+    try {
+      const res = await fetch("/api/config/test/iara-voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          IARA_API_URL: config.IARA_API_URL,
+          IARA_SYSTEM_PROMPT: config.IARA_SYSTEM_PROMPT,
+          IARA_PRESET_ID: config.IARA_PRESET_ID,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        error?: string;
+        message?: string;
+        detail?: string;
+      };
+      if (data.success) {
+        setTestIaraVoice({
+          state: "ok",
+          message: data.message ?? "OK",
+        });
+      } else {
+        const msg = [data.error ?? "Test failed"];
+        if (data.detail) msg.push(data.detail);
+        setTestIaraVoice({
+          state: "error",
+          message: msg.join(" — "),
+        });
+      }
+    } catch (e) {
+      setTestIaraVoice({
+        state: "error",
+        message: (e as Error).message,
+      });
+    }
+  }, [config.IARA_API_URL, config.IARA_SYSTEM_PROMPT, config.IARA_PRESET_ID]);
 
   const layoutClass =
     "fixed inset-0 flex flex-col bg-black text-white overflow-hidden";
@@ -428,10 +755,7 @@ export default function ConfigPage() {
           className={`${contentMaxWidth} py-4 flex items-center justify-between`}
         >
           <h1 className="text-2xl font-semibold">Settings</h1>
-          <Link
-            href="/"
-            className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm"
-          >
+          <Link href="/" className="config-btn-secondary">
             Back to Demo
           </Link>
         </div>
@@ -442,17 +766,17 @@ export default function ConfigPage() {
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         <div className={`${contentMaxWidth} pb-32 pt-6`}>
-          <p className="text-gray-400 text-sm mb-6">
+          <p className="config-page-intro">
             Settings are stored in{" "}
-            <code className="bg-white/10 px-1 rounded">config.local.json</code>{" "}
+            <code className="bg-white/10 px-1.5 py-0.5 rounded text-gray-300">
+              config.local.json
+            </code>{" "}
             on your machine and are not sent to GitHub.
           </p>
 
-          <form id="config-form" onSubmit={handleSave} className="space-y-8">
-            <section>
-              <h2 className="text-lg font-medium mb-4 text-gray-200">
-                Browser & device
-              </h2>
+          <form id="config-form" onSubmit={handleSave} className="space-y-0">
+            <section className="config-section">
+              <h2 className="config-section-title">Browser & device</h2>
               <p className="text-xs text-gray-500 mb-2">
                 Voice features need microphone access. This check uses the same
                 browser API (getUserMedia) that the demo uses during a session
@@ -469,7 +793,7 @@ export default function ConfigPage() {
                   type="button"
                   onClick={checkMicrophone}
                   disabled={micCheck.state === "testing"}
-                  className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+                  className="config-btn-primary"
                 >
                   {micCheck.state === "testing"
                     ? "Checking…"
@@ -488,16 +812,12 @@ export default function ConfigPage() {
               </div>
             </section>
 
-            <section>
-              <h2 className="text-lg font-medium mb-4 text-gray-200">
-                LiveAvatar
-              </h2>
+            <section className="config-section">
+              <h2 className="config-section-title">LiveAvatar</h2>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">
-                    API Key
-                  </label>
-                  <p className="text-xs text-gray-500 mb-1">
+                  <label className="config-label">API Key</label>
+                  <p className="config-hint mb-1">
                     Must be a <strong>LiveAvatar</strong> key from{" "}
                     <a
                       href="https://app.liveavatar.com/developers"
@@ -513,26 +833,22 @@ export default function ConfigPage() {
                     type="password"
                     value={config.API_KEY}
                     onChange={(e) => update("API_KEY", e.target.value)}
-                    className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                    className="config-input"
                     placeholder="Your LiveAvatar API key"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">
-                    API URL
-                  </label>
+                  <label className="config-label">API URL</label>
                   <input
                     type="text"
                     value={config.API_URL}
                     onChange={(e) => update("API_URL", e.target.value)}
-                    className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                    className="config-input"
                     placeholder="https://api.liveavatar.com"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">
-                    Avatar ID
-                  </label>
+                  <label className="config-label">Avatar ID</label>
                   {listsLoading ? (
                     <p className="text-xs text-gray-500">
                       Loading avatars from API…
@@ -548,7 +864,7 @@ export default function ConfigPage() {
                         const v = e.target.value;
                         if (v !== "__custom__") update("AVATAR_ID", v);
                       }}
-                      className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
+                      className="config-select"
                     >
                       <option value="">— Select avatar —</option>
                       {avatars.map((a) => (
@@ -565,7 +881,7 @@ export default function ConfigPage() {
                     type="text"
                     value={config.AVATAR_ID}
                     onChange={(e) => update("AVATAR_ID", e.target.value)}
-                    className="mt-1 w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                    className="config-input mt-1"
                     placeholder="Or paste Avatar UUID from LiveAvatar dashboard"
                   />
                 </div>
@@ -613,7 +929,7 @@ export default function ConfigPage() {
                       )
                     }
                     disabled={testLiveAvatar.state === "testing"}
-                    className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+                    className="config-btn-primary"
                   >
                     {testLiveAvatar.state === "testing"
                       ? "Testing…"
@@ -631,8 +947,8 @@ export default function ConfigPage() {
               </div>
             </section>
 
-            <section>
-              <h2 className="text-lg font-medium mb-4 text-gray-200">
+            <section className="config-section">
+              <h2 className="config-section-title">
                 FULL mode (voice & context)
               </h2>
               <p className="text-sm text-gray-400 mb-4">
@@ -696,13 +1012,9 @@ export default function ConfigPage() {
                     Voice and Context must be valid UUIDs.
                   </p>
                   <div>
-                    <label className="block text-sm text-gray-400 mb-1">
-                      Voice ID
-                    </label>
+                    <label className="config-label">Voice ID</label>
                     {listsLoading ? (
-                      <p className="text-xs text-gray-500">
-                        Loading voices from API…
-                      </p>
+                      <p className="config-hint">Loading voices from API…</p>
                     ) : voices.length > 0 ? (
                       <select
                         value={
@@ -714,7 +1026,7 @@ export default function ConfigPage() {
                           const v = e.target.value;
                           if (v !== "__custom__") update("VOICE_ID", v);
                         }}
-                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
+                        className="config-select"
                       >
                         <option value="">— Select voice —</option>
                         {voices.map((v) => (
@@ -732,15 +1044,13 @@ export default function ConfigPage() {
                       type="text"
                       value={config.VOICE_ID}
                       onChange={(e) => update("VOICE_ID", e.target.value)}
-                      className="mt-1 w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                      className="config-input mt-1"
                       placeholder="Or paste Voice UUID from LiveAvatar dashboard"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm text-gray-400 mb-1">
-                      Context ID
-                    </label>
-                    <p className="text-xs text-gray-500 mb-1">
+                    <label className="config-label">Context ID</label>
+                    <p className="config-hint mb-1">
                       The API does not provide a list of contexts; paste the
                       UUID from your LiveAvatar dashboard.
                     </p>
@@ -748,14 +1058,12 @@ export default function ConfigPage() {
                       type="text"
                       value={config.CONTEXT_ID}
                       onChange={(e) => update("CONTEXT_ID", e.target.value)}
-                      className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                      className="config-input"
                       placeholder="Context UUID"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm text-gray-400 mb-1">
-                      Language
-                    </label>
+                    <label className="config-label">Language</label>
                     {listsLoading ? (
                       <p className="text-xs text-gray-500">Loading…</p>
                     ) : languagesFromVoices.length > 0 ? (
@@ -769,7 +1077,7 @@ export default function ConfigPage() {
                           const v = e.target.value;
                           if (v !== "__custom__") update("LANGUAGE", v);
                         }}
-                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
+                        className="config-select"
                       >
                         <option value="">— Select language —</option>
                         {languagesFromVoices.map((lang) => (
@@ -786,7 +1094,7 @@ export default function ConfigPage() {
                       type="text"
                       value={config.LANGUAGE}
                       onChange={(e) => update("LANGUAGE", e.target.value)}
-                      className="mt-1 w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                      className="config-input mt-1"
                       placeholder="e.g. en, pt (from voices or custom code)"
                     />
                   </div>
@@ -809,7 +1117,7 @@ export default function ConfigPage() {
                         )
                       }
                       disabled={testFull.state === "testing"}
-                      className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+                      className="config-btn-primary"
                     >
                       {testFull.state === "testing"
                         ? "Testing…"
@@ -830,16 +1138,17 @@ export default function ConfigPage() {
               )}
             </section>
 
-            <section>
-              <h2 className="text-lg font-medium mb-4 text-gray-200">
-                LITE mode (OpenAI Realtime)
+            <section className="config-section">
+              <h2 className="config-section-title">
+                LITE mode (OpenAI Realtime / iara)
               </h2>
               <p className="text-sm text-gray-400 mb-4">
-                Two options: <strong>True LITE</strong> (we manage Realtime,
-                LiveAvatar only for avatar/lipsync) or{" "}
+                Options: <strong>True LITE</strong> (we manage OpenAI Realtime,
+                LiveAvatar for avatar/lipsync), <strong>iara</strong> (fully
+                local voice via iara orchestrator), or{" "}
                 <strong>LiveAvatar-managed LITE</strong> (LiveAvatar brokers
-                Realtime; simpler but custom instructions may not apply). Enable
-                one or both; shared settings below apply to whichever you use.
+                Realtime). Enable one or more; priority is True LITE → iara →
+                LiveAvatar-managed.
               </p>
 
               <div className="space-y-6 mb-6">
@@ -873,6 +1182,26 @@ export default function ConfigPage() {
                     <button
                       type="button"
                       role="switch"
+                      aria-checked={config.USE_IARA}
+                      onClick={() => update("USE_IARA", !config.USE_IARA)}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        config.USE_IARA ? "bg-blue-500" : "bg-white/20"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                          config.USE_IARA ? "translate-x-5" : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                    <label className="text-sm text-gray-300">
+                      Use iara (local voice)
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      role="switch"
                       aria-checked={config.USE_OPENAI_REALTIME_FOR_LITE}
                       onClick={() =>
                         update(
@@ -900,17 +1229,157 @@ export default function ConfigPage() {
                   </div>
                 </div>
 
+                {config.USE_IARA && (
+                  <div className="config-subsection space-y-4">
+                    <h3 className="config-subsection-title">
+                      iara (local voice) settings
+                    </h3>
+                    <p className="text-xs text-gray-500">
+                      Connect to an iara orchestrator for fully local
+                      STT+LLM+TTS. In iara, realtime client integration is
+                      typically WebRTC via <code>/api/offer</code>. This section
+                      configures the HTTP Voice API path (
+                      <code>/api/voice</code>) used by this demo, plus an
+                      optional custom WebSocket bridge URL if you run one.
+                    </p>
+                    <div>
+                      <label className="config-label">
+                        iara Voice API URL (optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={config.IARA_API_URL}
+                        onChange={(e) => update("IARA_API_URL", e.target.value)}
+                        className="config-input"
+                        placeholder="http://127.0.0.1:13000"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Accepts base URL (e.g. http://127.0.0.1:13000) or full
+                        endpoint (e.g. http://127.0.0.1:17860/api/voice).
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2 mt-2">
+                        <button
+                          type="button"
+                          onClick={testIaraVoiceApi}
+                          disabled={testIaraVoice.state === "testing"}
+                          className="config-btn-secondary"
+                        >
+                          {testIaraVoice.state === "testing"
+                            ? "Testing…"
+                            : "Test Voice API (server)"}
+                        </button>
+                        {testIaraVoice.state === "ok" && (
+                          <span className="text-green-400 text-sm">
+                            {testIaraVoice.message ?? "OK"}
+                          </span>
+                        )}
+                        {testIaraVoice.state === "error" && (
+                          <span className="text-red-400 text-sm">
+                            {testIaraVoice.message ?? "Error"}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="config-label">
+                        iara WebSocket URL (optional custom bridge)
+                      </label>
+                      <input
+                        type="text"
+                        value={config.IARA_WS_URL}
+                        onChange={(e) => update("IARA_WS_URL", e.target.value)}
+                        className="config-input"
+                        placeholder="ws://127.0.0.1:17860/api/voice/ws"
+                      />
+                      <div className="flex flex-wrap items-center gap-2 mt-2">
+                        <button
+                          type="button"
+                          onClick={testIaraBrowserWs}
+                          disabled={testIaraBrowser.state === "testing"}
+                          className="config-btn-primary"
+                        >
+                          {testIaraBrowser.state === "testing"
+                            ? "Testing…"
+                            : "Test WS (browser)"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={testIaraServerWs}
+                          disabled={testIaraServer.state === "testing"}
+                          className="config-btn-secondary"
+                        >
+                          {testIaraServer.state === "testing"
+                            ? "Testing…"
+                            : "Test WS (server)"}
+                        </button>
+                        {testIaraBrowser.state === "ok" && (
+                          <span className="text-green-400 text-sm">
+                            Browser: {testIaraBrowser.message ?? "OK"}
+                          </span>
+                        )}
+                        {testIaraBrowser.state === "error" && (
+                          <span className="text-red-400 text-sm">
+                            Browser: {testIaraBrowser.message ?? "Error"}
+                          </span>
+                        )}
+                        {testIaraServer.state === "ok" && (
+                          <span className="text-green-400 text-sm">
+                            Server: {testIaraServer.message ?? "OK"}
+                          </span>
+                        )}
+                        {testIaraServer.state === "error" && (
+                          <span className="text-red-400 text-sm">
+                            Server: {testIaraServer.message ?? "Error"}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Use only if you run a dedicated WS ingest bridge.
+                        Browser test checks CORS/origin + client reachability.
+                        Server test checks if the Next.js server can reach that
+                        WS endpoint.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="config-label">
+                        System prompt / instructions (optional)
+                      </label>
+                      <textarea
+                        value={config.IARA_SYSTEM_PROMPT}
+                        onChange={(e) =>
+                          update("IARA_SYSTEM_PROMPT", e.target.value)
+                        }
+                        rows={3}
+                        className="config-textarea"
+                        placeholder="e.g. You are a helpful assistant."
+                      />
+                    </div>
+                    <div>
+                      <label className="config-label">
+                        Preset ID (optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={config.IARA_PRESET_ID}
+                        onChange={(e) =>
+                          update("IARA_PRESET_ID", e.target.value)
+                        }
+                        className="config-input"
+                        placeholder="Orchestrator preset id"
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {(config.USE_TRUE_LITE ||
                   config.USE_OPENAI_REALTIME_FOR_LITE) && (
-                  <div className="ml-0 space-y-4 pl-0 border border-white/10 rounded-md p-4 bg-white/5">
-                    <h3 className="text-sm font-medium text-gray-200">
+                  <div className="config-subsection space-y-4">
+                    <h3 className="config-subsection-title">
                       OpenAI Realtime settings (used by True LITE and
                       LiveAvatar-managed)
                     </h3>
                     <div>
-                      <label className="block text-sm text-gray-400 mb-1">
-                        OpenAI API key
-                      </label>
+                      <label className="config-label">OpenAI API key</label>
                       <div className="flex flex-wrap items-center gap-2">
                         <input
                           type="password"
@@ -918,7 +1387,7 @@ export default function ConfigPage() {
                           onChange={(e) =>
                             update("OPENAI_REALTIME_API_KEY", e.target.value)
                           }
-                          className="flex-1 min-w-[200px] bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                          className="config-input flex-1 min-w-[200px]"
                           placeholder="sk-… (ephemeral keys for True LITE; register for LiveAvatar-managed)"
                         />
                         <button
@@ -934,7 +1403,7 @@ export default function ConfigPage() {
                             )
                           }
                           disabled={testOpenAI.state === "testing"}
-                          className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+                          className="config-btn-primary"
                         >
                           {testOpenAI.state === "testing"
                             ? "Testing…"
@@ -958,9 +1427,7 @@ export default function ConfigPage() {
                       )}
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-400 mb-1">
-                        Realtime model
-                      </label>
+                      <label className="config-label">Realtime model</label>
                       <select
                         value={
                           realtimeModelOptions.some(
@@ -973,7 +1440,7 @@ export default function ConfigPage() {
                           const v = e.target.value;
                           if (v) update("OPENAI_REALTIME_MODEL", v);
                         }}
-                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
+                        className="config-select"
                       >
                         <option value="">— Select model —</option>
                         {realtimeModelOptions.map((m) => (
@@ -988,20 +1455,18 @@ export default function ConfigPage() {
                         onChange={(e) =>
                           update("OPENAI_REALTIME_MODEL", e.target.value)
                         }
-                        className="mt-1 w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                        className="config-input mt-1"
                         placeholder="Or type model id (e.g. gpt-realtime)"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-400 mb-1">
-                        Voice
-                      </label>
+                      <label className="config-label">Voice</label>
                       <select
                         value={config.OPENAI_REALTIME_VOICE}
                         onChange={(e) =>
                           update("OPENAI_REALTIME_VOICE", e.target.value)
                         }
-                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white"
+                        className="config-select"
                       >
                         {OPENAI_REALTIME_VOICES.map((v) => (
                           <option key={v.value} value={v.value}>
@@ -1024,7 +1489,7 @@ export default function ConfigPage() {
                       </p>
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-400 mb-1">
+                      <label className="config-label">
                         System instructions
                       </label>
                       <textarea
@@ -1033,7 +1498,7 @@ export default function ConfigPage() {
                           update("OPENAI_REALTIME_INSTRUCTIONS", e.target.value)
                         }
                         rows={4}
-                        className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                        className="config-textarea"
                         placeholder="e.g. You are a realtime voice AI. Personality: warm, witty; never claim to be human."
                       />
                       <p className="text-xs text-gray-500 mt-1">
@@ -1043,7 +1508,7 @@ export default function ConfigPage() {
                     </div>
                     {config.USE_TRUE_LITE && (
                       <div>
-                        <label className="block text-sm text-gray-400 mb-1">
+                        <label className="config-label">
                           OpenAI Prompt ID (optional, True LITE only)
                         </label>
                         <input
@@ -1052,7 +1517,7 @@ export default function ConfigPage() {
                           onChange={(e) =>
                             update("OPENAI_REALTIME_PROMPT_ID", e.target.value)
                           }
-                          className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                          className="config-input"
                           placeholder="pmpt_… (from OpenAI Prompt library)"
                         />
                         <p className="text-xs text-gray-500 mt-1">
@@ -1063,7 +1528,7 @@ export default function ConfigPage() {
                     {config.USE_OPENAI_REALTIME_FOR_LITE && (
                       <>
                         <div>
-                          <label className="block text-sm text-gray-400 mb-1">
+                          <label className="config-label">
                             Temperature (0.6–1.2, LiveAvatar-managed only)
                           </label>
                           <input
@@ -1077,7 +1542,7 @@ export default function ConfigPage() {
                               if (!Number.isNaN(v))
                                 update("OPENAI_REALTIME_TEMPERATURE", v);
                             }}
-                            className="w-full bg-white/10 border border-white/20 rounded-md px-3 py-2 text-white placeholder-gray-500"
+                            className="config-input"
                           />
                         </div>
                         <div>
@@ -1088,7 +1553,7 @@ export default function ConfigPage() {
                               registerSecretLoading ||
                               !(config.OPENAI_REALTIME_API_KEY ?? "").trim()
                             }
-                            className="px-4 py-2 rounded-md bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+                            className="config-btn-secondary"
                           >
                             {registerSecretLoading
                               ? "Registering…"
@@ -1124,7 +1589,7 @@ export default function ConfigPage() {
             type="submit"
             form="config-form"
             disabled={saveStatus === "saving"}
-            className="px-6 py-2 rounded-md bg-white text-black font-medium disabled:opacity-50"
+            className="config-btn-primary"
           >
             {saveStatus === "saving" ? "Saving…" : "Save"}
           </button>
@@ -1132,7 +1597,7 @@ export default function ConfigPage() {
             type="button"
             onClick={handleResetDefaults}
             disabled={saveStatus === "saving"}
-            className="px-6 py-2 rounded-md bg-white/10 hover:bg-white/20 disabled:opacity-50"
+            className="config-btn-secondary"
           >
             Reset to defaults
           </button>

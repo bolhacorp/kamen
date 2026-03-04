@@ -82,3 +82,11 @@ export function logOrchestrator(
 ) {
   log("orchestrator", level, message, detail);
 }
+
+export function logIara(
+  message: string,
+  level: PipelineLogLevel = "info",
+  detail?: Record<string, unknown>,
+) {
+  log("iara", level, message, detail);
+}

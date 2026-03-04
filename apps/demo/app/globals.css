@@ -55,8 +55,24 @@ body {
   pointer-events: none;
 }
 
-.header-logo, .kamen-logo {
+.header-logo {
   pointer-events: auto;
+}
+
+/* KAMEN title: centered to full page width, not to left/right content */
+.kamen-logo {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+
+.kamen-title {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.95);
+  text-transform: uppercase;
 }
 
 .logo-placeholder {
@@ -67,13 +83,6 @@ body {
   background-position: center;
 }
 
-.kamen-placeholder {
-  width: var(--kamen-size-width);
-  height: var(--kamen-size-height);
-  background-image: url('../public/kamen.png');
-  background-size: cover;
-  background-position: center;
-}
 
 .header-chip {
   pointer-events: auto;
@@ -101,6 +110,55 @@ body {
   align-items: center;
   justify-content: flex-end;
   padding-bottom: 60px;
+}
+
+/* Status / overview panel - clearer separation from background */
+.overview-panel {
+  margin-bottom: 28px;
+  padding: 18px 22px;
+  max-width: 420px;
+  width: 100%;
+  text-align: left;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+}
+
+/* Secondary link on idle screen - centered, clear affordance */
+.idle-settings-link {
+  display: block;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+  text-decoration: none;
+  padding: 8px 12px;
+  border-radius: 8px;
+  transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.idle-settings-link:hover {
+  color: rgba(255, 255, 255, 1);
+  text-decoration: underline;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.overview-panel .overview-refresh-btn {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+  transition: color 0.2s ease;
+}
+
+.overview-panel .overview-refresh-btn:hover {
+  color: rgba(255, 255, 255, 1);
 }
 
 .idle-background {
@@ -324,4 +382,137 @@ body {
   to {
     opacity: 1;
   }
+}
+
+/* ========== Config / Settings page ========== */
+.config-page-intro {
+  color: rgb(161 161 170);
+  font-size: 0.875rem;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+
+.config-section {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 1.5rem 1.5rem 1.75rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+}
+
+.config-section-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: rgb(228 228 231);
+  margin-bottom: 0.75rem;
+  letter-spacing: 0.01em;
+}
+
+.config-subsection {
+  margin-top: 1rem;
+  padding: 1.25rem 1.25rem 1.5rem;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  border-left: 3px solid rgba(96, 165, 250, 0.5);
+}
+
+.config-subsection-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: rgb(228 228 231);
+  margin-bottom: 1rem;
+}
+
+.config-input,
+.config-select,
+.config-textarea {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  color: #fff;
+  font-size: 0.875rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.config-input::placeholder,
+.config-textarea::placeholder {
+  color: rgb(113 113 122);
+}
+
+.config-input:focus,
+.config-select:focus,
+.config-textarea:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.35);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
+}
+
+.config-textarea {
+  min-height: 6rem;
+  resize: vertical;
+}
+
+.config-btn-primary {
+  padding: 0.5rem 1.25rem;
+  border-radius: 10px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  background: #fff;
+  color: #000;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.config-btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.config-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.config-btn-secondary {
+  padding: 0.5rem 1rem;
+  border-radius: 10px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.config-btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.config-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.config-label {
+  display: block;
+  font-size: 0.875rem;
+  color: rgb(161 161 170);
+  margin-bottom: 0.25rem;
+}
+
+.config-hint {
+  font-size: 0.75rem;
+  color: rgb(113 113 122);
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
 }

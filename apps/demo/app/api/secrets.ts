@@ -25,6 +25,11 @@ const DEFAULTS = {
   OPENAI_REALTIME_VOICE: "marin",
   OPENAI_REALTIME_TEMPERATURE: 0.8,
   OPENAI_REALTIME_INSTRUCTIONS: "",
+  USE_IARA: false,
+  IARA_WS_URL: "",
+  IARA_API_URL: "",
+  IARA_SYSTEM_PROMPT: "",
+  IARA_PRESET_ID: "",
 } as const;
 
 export type Config = {
@@ -50,6 +55,11 @@ export type Config = {
   OPENAI_REALTIME_VOICE: string;
   OPENAI_REALTIME_TEMPERATURE: number;
   OPENAI_REALTIME_INSTRUCTIONS: string;
+  USE_IARA: boolean;
+  IARA_WS_URL: string;
+  IARA_API_URL: string;
+  IARA_SYSTEM_PROMPT: string;
+  IARA_PRESET_ID: string;
 };
 
 function getConfigPath(): string {
@@ -190,6 +200,28 @@ export function getConfig(): Config {
         fromFile.USE_PUSH_TO_TALK_FOR_FULL = Boolean(
           anyFile.use_push_to_talk_for_full,
         );
+      if (anyFile.use_iara !== undefined && fromFile.USE_IARA === undefined)
+        fromFile.USE_IARA = Boolean(anyFile.use_iara);
+      if (
+        anyFile.iara_ws_url !== undefined &&
+        fromFile.IARA_WS_URL === undefined
+      )
+        fromFile.IARA_WS_URL = String(anyFile.iara_ws_url);
+      if (
+        anyFile.iara_api_url !== undefined &&
+        fromFile.IARA_API_URL === undefined
+      )
+        fromFile.IARA_API_URL = String(anyFile.iara_api_url);
+      if (
+        anyFile.iara_system_prompt !== undefined &&
+        fromFile.IARA_SYSTEM_PROMPT === undefined
+      )
+        fromFile.IARA_SYSTEM_PROMPT = String(anyFile.iara_system_prompt);
+      if (
+        anyFile.iara_preset_id !== undefined &&
+        fromFile.IARA_PRESET_ID === undefined
+      )
+        fromFile.IARA_PRESET_ID = String(anyFile.iara_preset_id);
     }
   } catch {
     // ignore parse errors; use defaults

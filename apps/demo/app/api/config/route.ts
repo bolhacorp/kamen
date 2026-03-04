@@ -28,6 +28,11 @@ function validateBody(body: unknown): body is Config {
   if (typeof o.OPENAI_REALTIME_VOICE !== "string") return false;
   if (typeof o.OPENAI_REALTIME_TEMPERATURE !== "number") return false;
   if (typeof o.OPENAI_REALTIME_INSTRUCTIONS !== "string") return false;
+  if (typeof o.USE_IARA !== "boolean") return false;
+  if (typeof o.IARA_WS_URL !== "string") return false;
+  if (typeof o.IARA_API_URL !== "string") return false;
+  if (typeof o.IARA_SYSTEM_PROMPT !== "string") return false;
+  if (typeof o.IARA_PRESET_ID !== "string") return false;
   return true;
 }
 
