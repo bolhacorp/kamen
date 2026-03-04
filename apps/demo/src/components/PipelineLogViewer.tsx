@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePipelineLog } from "../pipeline-log/usePipelineLog";
 import type {
   PipelineLogSource,
@@ -38,6 +38,7 @@ export const PipelineLogViewer: React.FC = () => {
     "all",
   );
   const [collapsedIds, setCollapsedIds] = useState<Record<string, boolean>>({});
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const filtered = useMemo(() => {
     return entries.filter((e) => {
@@ -59,13 +60,23 @@ export const PipelineLogViewer: React.FC = () => {
     void navigator.clipboard.writeText(text);
   };
 
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [filtered]);
+
+  /** Match app header height so the log panel starts below it (no overlap). */
+  const headerOffsetPx = 64;
+
   return (
     <div
-      className="fixed top-0 right-0 z-[100] flex flex-col overflow-hidden border border-white/20 shadow-xl"
+      className="fixed right-0 z-[100] flex flex-col overflow-hidden border border-white/20 shadow-xl"
       style={{
         background: "rgb(17 24 39)",
+        top: headerOffsetPx,
         width: "min(560px, 96vw)",
-        height: "100vh",
+        height: `calc(100vh - ${headerOffsetPx}px)`,
       }}
     >
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/10 flex-shrink-0">
@@ -114,8 +125,8 @@ export const PipelineLogViewer: React.FC = () => {
         </div>
       </div>
       <div
+        ref={scrollRef}
         className="overflow-y-auto flex-1 font-mono text-xs p-2"
-        style={{ minHeight: 200 }}
       >
         {filtered.length === 0 ? (
           <p className="text-gray-500 p-4">
