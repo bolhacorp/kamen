@@ -68,6 +68,8 @@ const LiveAvatarSessionComponent: React.FC<{
   iaraPresetId,
 }) => {
   const [message, setMessage] = useState("");
+  const [realtimeReady, setRealtimeReady] = useState(false);
+  const [iaraReady, setIaraReady] = useState(false);
   const {
     sessionState,
     isStreamReady,
@@ -80,7 +82,19 @@ const LiveAvatarSessionComponent: React.FC<{
   const { sessionRef } = useLiveAvatarContext();
   const wsEnabled = process.env.NEXT_PUBLIC_IARA_USE_VOICE_WS !== "false";
   const resolvedIaraVoiceWsUrl = resolveIaraVoiceWsUrl(iaraWsUrl, iaraApiUrl);
-  useTrueLiteRealtime(mode === "LITE_TRUE", sessionRef, sessionState);
+
+  const handleRealtimeReady = React.useCallback(
+    () => setRealtimeReady(true),
+    [],
+  );
+  const handleIaraReady = React.useCallback(() => setIaraReady(true), []);
+
+  useTrueLiteRealtime(
+    mode === "LITE_TRUE",
+    sessionRef,
+    sessionState,
+    handleRealtimeReady,
+  );
   useIaraVoiceWs(
     mode === "LITE_IARA" && wsEnabled && !!resolvedIaraVoiceWsUrl,
     resolvedIaraVoiceWsUrl,
@@ -88,6 +102,7 @@ const LiveAvatarSessionComponent: React.FC<{
     sessionState,
     iaraSystemPrompt,
     iaraPresetId,
+    handleIaraReady,
   );
   useIaraVoiceApi(
     mode === "LITE_IARA" &&
@@ -95,6 +110,7 @@ const LiveAvatarSessionComponent: React.FC<{
       !!iaraApiUrl,
     sessionRef,
     sessionState,
+    handleIaraReady,
   );
   const {
     isAvatarTalking,
@@ -143,11 +159,20 @@ const LiveAvatarSessionComponent: React.FC<{
     }
   }, [attachElement, isStreamReady]);
 
+  // For LITE_TRUE and LITE_IARA, wait for voice "ready" before starting LiveAvatar.
+  const canStartSession =
+    sessionState === SessionState.INACTIVE &&
+    (mode === "FULL" ||
+      mode === "FULL_PTT" ||
+      mode === "LITE" ||
+      (mode === "LITE_TRUE" && realtimeReady) ||
+      (mode === "LITE_IARA" && iaraReady));
+
   useEffect(() => {
-    if (sessionState === SessionState.INACTIVE) {
+    if (canStartSession) {
       startSession();
     }
-  }, [startSession, sessionState]);
+  }, [startSession, canStartSession]);
 
   const VoiceChatComponents = (
     <>
@@ -210,10 +235,23 @@ const LiveAvatarSessionComponent: React.FC<{
     </div>
   );
 
+  const voiceConnecting =
+    (mode === "LITE_TRUE" &&
+      sessionState === SessionState.INACTIVE &&
+      !realtimeReady) ||
+    (mode === "LITE_IARA" &&
+      sessionState === SessionState.INACTIVE &&
+      !iaraReady);
+
   return (
     <div className="conversation-screen">
       <Header />
-      {!isStreamReady ? (
+      {voiceConnecting ? (
+        <div className="loading-transition">
+          <Loading />
+          <p className="mt-4 text-center text-sm opacity-80">Loading voice…</p>
+        </div>
+      ) : !isStreamReady ? (
         <Loading />
       ) : (
         <>

@@ -106,6 +106,7 @@ export function useIaraVoiceApi(
   enabled: boolean,
   sessionRef: React.RefObject<LiveAvatarSession | null>,
   sessionState: SessionState,
+  onIaraReady?: () => void,
 ) {
   const streamRef = useRef<MediaStream | null>(null);
   const bufferRef = useRef<number[]>([]);
@@ -118,6 +119,23 @@ export function useIaraVoiceApi(
   const keepAliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const onIaraReadyRef = useRef(onIaraReady);
+  const iaraApiReadyCalledRef = useRef(false);
+  onIaraReadyRef.current = onIaraReady;
+
+  // No persistent connection: signal "voice ready" immediately so LiveAvatar can start.
+  useEffect(() => {
+    if (!enabled || !onIaraReadyRef.current) return;
+    if (iaraApiReadyCalledRef.current) return;
+    iaraApiReadyCalledRef.current = true;
+    onIaraReadyRef.current?.();
+    return () => {
+      iaraApiReadyCalledRef.current = false;
+    };
+  }, [enabled]);
 
   useEffect(() => {
     if (
@@ -319,6 +337,7 @@ export function useIaraVoiceApi(
         }
         streamRef.current = stream;
         const audioContext = new AudioContext();
+        audioContextRef.current = audioContext;
         const sampleRate = audioContext.sampleRate;
         logIara("iara Voice API: microphone acquired", "info", {
           sampleRate,
@@ -326,6 +345,8 @@ export function useIaraVoiceApi(
         });
         const source = audioContext.createMediaStreamSource(stream);
         const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        sourceRef.current = source;
+        processorRef.current = processor;
         source.connect(processor);
         processor.connect(audioContext.destination);
         processor.onaudioprocess = (e: AudioProcessingEvent) => {
@@ -399,6 +420,26 @@ export function useIaraVoiceApi(
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
+      }
+      if (processorRef.current) {
+        try {
+          processorRef.current.disconnect();
+        } catch {
+          // ignore
+        }
+        processorRef.current = null;
+      }
+      if (sourceRef.current) {
+        try {
+          sourceRef.current.disconnect();
+        } catch {
+          // ignore
+        }
+        sourceRef.current = null;
+      }
+      if (audioContextRef.current) {
+        void audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
       }
       if (avatarListeningRef.current && sessionRef.current) {
         sessionRef.current.stopListening();

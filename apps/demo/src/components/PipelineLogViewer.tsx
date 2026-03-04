@@ -66,8 +66,10 @@ export const PipelineLogViewer: React.FC = () => {
     el.scrollTop = el.scrollHeight;
   }, [filtered]);
 
-  /** Match app header height so the log panel starts below it (no overlap). */
+  /** Match app header so the log panel starts below it (no overlap). */
   const headerOffsetPx = 64;
+  /** Leave space for the fixed "Log" button (bottom-4 right-4) so it stays clickable. */
+  const footerOffsetPx = 72;
 
   return (
     <div
@@ -75,8 +77,9 @@ export const PipelineLogViewer: React.FC = () => {
       style={{
         background: "rgb(17 24 39)",
         top: headerOffsetPx,
+        bottom: footerOffsetPx,
         width: "min(560px, 96vw)",
-        height: `calc(100vh - ${headerOffsetPx}px)`,
+        height: `calc(100vh - ${headerOffsetPx}px - ${footerOffsetPx}px)`,
       }}
     >
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/10 flex-shrink-0">

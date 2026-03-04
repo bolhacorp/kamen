@@ -115,6 +115,14 @@ export function drainContiguousSentenceOrder(
   return { drained, next };
 }
 
+function isIaraVoiceActive(state: SessionState): boolean {
+  return (
+    state === SessionState.INACTIVE ||
+    state === SessionState.CONNECTING ||
+    state === SessionState.CONNECTED
+  );
+}
+
 export function useIaraVoiceWs(
   enabled: boolean,
   wsUrl: string,
@@ -122,12 +130,20 @@ export function useIaraVoiceWs(
   sessionState: SessionState,
   iaraSystemPrompt?: string,
   iaraPresetId?: string,
+  onIaraReady?: () => void,
 ) {
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const keepAliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const onIaraReadyRef = useRef(onIaraReady);
+  const iaraReadyCalledRef = useRef(false);
+  const tornDownRef = useRef(false);
+  onIaraReadyRef.current = onIaraReady;
 
   const iaraSessionIdRef = useRef<string>(buildSessionId());
   const turnRef = useRef<IaraTurnState>({
@@ -153,19 +169,53 @@ export function useIaraVoiceWs(
   const bargeInCountRef = useRef(0);
   const turnCompletedRef = useRef(false);
 
+  // Teardown: close WS only when leaving iara flow (disabled or disconnected).
   useEffect(() => {
-    if (
-      !enabled ||
-      !sessionRef.current ||
-      sessionState !== SessionState.CONNECTED
-    ) {
-      return;
+    if (enabled && sessionState !== SessionState.DISCONNECTED) return;
+    tornDownRef.current = true;
+    const ws = wsRef.current;
+    if (ws) {
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+      wsRef.current = null;
     }
-    const session = sessionRef.current;
+    iaraReadyCalledRef.current = false;
+    if (processorRef.current) {
+      try {
+        processorRef.current.disconnect();
+      } catch {
+        // ignore
+      }
+      processorRef.current = null;
+    }
+    if (sourceRef.current) {
+      try {
+        sourceRef.current.disconnect();
+      } catch {
+        // ignore
+      }
+      sourceRef.current = null;
+    }
+    if (audioContextRef.current) {
+      void audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+  }, [enabled, sessionState]);
+
+  useEffect(() => {
+    if (!enabled || !isIaraVoiceActive(sessionState)) return;
     const url = wsUrl.trim();
     if (!url) return;
+    if (
+      sessionState === SessionState.CONNECTED &&
+      (!sessionRef.current || !wsRef.current)
+    )
+      return;
 
-    let cancelled = false;
+    tornDownRef.current = false;
     let speaking = false;
     let speechStartedAt = 0;
     let lastSpeechAt = 0;
@@ -193,7 +243,8 @@ export function useIaraVoiceWs(
       if (turn.speakEndSent || !turn.eventId) return;
       if (!turnCompletedRef.current) return;
       if (queueDepthRef.current > 0) return;
-      session.sendAgentSpeakEnd(turn.eventId);
+      if (sessionRef.current?.state !== SessionState.CONNECTED) return;
+      sessionRef.current.sendAgentSpeakEnd(turn.eventId);
       turn.speakEndSent = true;
       logIara("iara.ws turn.completed.summary", "info", {
         type: "turn.completed",
@@ -214,7 +265,8 @@ export function useIaraVoiceWs(
     };
 
     const flushPlayback = () => {
-      if (cancelled || !sessionRef.current) return;
+      if (tornDownRef.current || !sessionRef.current) return;
+      if (sessionRef.current?.state !== SessionState.CONNECTED) return;
       const turn = turnRef.current;
       const { drained, next } = drainContiguousSentenceOrder(
         sentenceMapRef.current,
@@ -226,12 +278,14 @@ export function useIaraVoiceWs(
           playbackStartedAtRef.current = Date.now();
         }
         const base64 = uint8ToBase64(chunk);
+        const s = sessionRef.current;
+        if (!s) return;
         if (!turn.eventId) {
           // Let LiveAvatar SDK create the canonical event id for playback.
           // iara turn_id is tracked separately for logs/cancel semantics.
-          turn.eventId = session.sendAgentSpeakBase64(base64);
+          turn.eventId = s.sendAgentSpeakBase64(base64);
         } else {
-          session.sendAgentSpeakBase64(base64, turn.eventId);
+          s.sendAgentSpeakBase64(base64, turn.eventId);
         }
         turn.ttsChunksPlayed += 1;
         turn.chunksDispatched += 1;
@@ -275,8 +329,12 @@ export function useIaraVoiceWs(
       sentenceMapRef.current.clear();
       queueDepthRef.current = 0;
       turnCompletedRef.current = true;
-      if (turn.eventId && !turn.speakEndSent) {
-        session.sendAgentSpeakEnd(turn.eventId);
+      if (
+        turn.eventId &&
+        !turn.speakEndSent &&
+        sessionRef.current?.state === SessionState.CONNECTED
+      ) {
+        sessionRef.current.sendAgentSpeakEnd(turn.eventId);
         turn.speakEndSent = true;
       }
       logIara("iara.ws turn.cancel.sent", "warn", {
@@ -306,8 +364,10 @@ export function useIaraVoiceWs(
       speaking = false;
       speechStartedAt = 0;
       lastSpeechAt = 0;
-      session.stopListening();
-      logLiveAvatar("iara.ws agent.stop_listening (turn.commit)", "debug");
+      if (sessionRef.current?.state === SessionState.CONNECTED) {
+        sessionRef.current.stopListening();
+        logLiveAvatar("iara.ws agent.stop_listening (turn.commit)", "debug");
+      }
       logIara("iara.ws turn.commit.sent", "info", {
         type: "turn.commit",
         session_id: iaraSessionIdRef.current,
@@ -315,203 +375,213 @@ export function useIaraVoiceWs(
       });
     };
 
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
-    ws.binaryType = "arraybuffer";
+    const connectWs = () => {
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+      ws.binaryType = "arraybuffer";
 
-    ws.onopen = () => {
-      if (cancelled) return;
-      logIara("iara.ws connected", "info", {
-        url,
-        session_id: iaraSessionIdRef.current,
-      });
-    };
+      ws.onopen = () => {
+        if (tornDownRef.current) return;
+        logIara("iara.ws connected (voice ready)", "info", {
+          url,
+          session_id: iaraSessionIdRef.current,
+        });
+        if (!iaraReadyCalledRef.current) {
+          iaraReadyCalledRef.current = true;
+          onIaraReadyRef.current?.();
+        }
+      };
 
-    ws.onmessage = (event) => {
-      if (cancelled) return;
-      if (typeof event.data !== "string") return;
-      let data: Record<string, unknown>;
-      try {
-        data = JSON.parse(event.data) as Record<string, unknown>;
-      } catch {
-        return;
-      }
-      const type = String(data.type ?? "");
-      const turn = turnRef.current;
-      if (!type) return;
-      if (type === "turn.started") {
-        turn.turnId = typeof data.turn_id === "string" ? data.turn_id : null;
-        turn.eventId = null;
-        turn.startedAtMs = Date.now();
-        turn.sttChars = 0;
-        turn.llmChunkCount = 0;
-        turn.ttsChunksPlayed = 0;
-        turn.totalBytesPlayed = 0;
-        turn.truncated = false;
-        turn.cancelled = false;
-        turn.speakEndSent = false;
-        resetTurnCounters();
-        resetTurnPlaybackState();
-      } else if (type === "stt.final") {
-        const text =
-          typeof data.text === "string"
-            ? data.text
-            : typeof data.transcript === "string"
-              ? data.transcript
-              : "";
-        turn.sttChars = text.length;
-      } else if (type === "llm.chunk") {
-        turn.llmChunkCount += 1;
-      } else if (type === "tts.audio") {
-        const eventTurnId =
-          typeof data.turn_id === "string" ? data.turn_id : null;
-        if (eventTurnId && turn.turnId && eventTurnId !== turn.turnId) {
-          turn.droppedChunks += 1;
-          logIara("iara.ws tts.audio dropped", "warn", {
-            reason: "wrong_turn_id",
-            expected_turn_id: turn.turnId,
-            received_turn_id: eventTurnId,
-            session_id: iaraSessionIdRef.current,
-          });
-          return;
-        }
-        const sentenceIndex = Number(data.sentence_index ?? 0);
-        const audioBase64 =
-          typeof data.audio_base64 === "string" ? data.audio_base64 : "";
-        if (!audioBase64 || audioBase64.length === 0) {
-          turn.droppedChunks += 1;
-          logIara("iara.ws tts.audio dropped", "warn", {
-            reason: "missing_audio_base64",
-            turn_id: turn.turnId,
-            sentence_index: sentenceIndex,
-            session_id: iaraSessionIdRef.current,
-          });
-          return;
-        }
-        if (!Number.isFinite(sentenceIndex)) {
-          turn.droppedChunks += 1;
-          logIara("iara.ws tts.audio dropped", "warn", {
-            reason: "invalid_sentence_index",
-            turn_id: turn.turnId,
-            session_id: iaraSessionIdRef.current,
-          });
-          return;
-        }
-        let bytes: Uint8Array;
+      ws.onmessage = (event) => {
+        if (tornDownRef.current) return;
+        if (typeof event.data !== "string") return;
+        let data: Record<string, unknown>;
         try {
-          bytes = base64ToUint8(audioBase64);
-        } catch (err) {
-          turn.droppedChunks += 1;
-          logIara("iara.ws tts.audio dropped", "warn", {
-            reason: "decode_fail",
-            turn_id: turn.turnId,
-            sentence_index: sentenceIndex,
-            session_id: iaraSessionIdRef.current,
-            error: err instanceof Error ? err.message : String(err),
-          });
+          data = JSON.parse(event.data) as Record<string, unknown>;
+        } catch {
           return;
         }
-        if (bytes.byteLength === 0) {
-          turn.droppedChunks += 1;
-          logIara("iara.ws tts.audio dropped", "warn", {
-            reason: "decoded_empty",
+        const type = String(data.type ?? "");
+        const turn = turnRef.current;
+        if (!type) return;
+        if (type === "turn.started") {
+          turn.turnId = typeof data.turn_id === "string" ? data.turn_id : null;
+          turn.eventId = null;
+          turn.startedAtMs = Date.now();
+          turn.sttChars = 0;
+          turn.llmChunkCount = 0;
+          turn.ttsChunksPlayed = 0;
+          turn.totalBytesPlayed = 0;
+          turn.truncated = false;
+          turn.cancelled = false;
+          turn.speakEndSent = false;
+          resetTurnCounters();
+          resetTurnPlaybackState();
+        } else if (type === "stt.final") {
+          const text =
+            typeof data.text === "string"
+              ? data.text
+              : typeof data.transcript === "string"
+                ? data.transcript
+                : "";
+          turn.sttChars = text.length;
+        } else if (type === "llm.chunk") {
+          turn.llmChunkCount += 1;
+        } else if (type === "tts.audio") {
+          const eventTurnId =
+            typeof data.turn_id === "string" ? data.turn_id : null;
+          if (eventTurnId && turn.turnId && eventTurnId !== turn.turnId) {
+            turn.droppedChunks += 1;
+            logIara("iara.ws tts.audio dropped", "warn", {
+              reason: "wrong_turn_id",
+              expected_turn_id: turn.turnId,
+              received_turn_id: eventTurnId,
+              session_id: iaraSessionIdRef.current,
+            });
+            return;
+          }
+          const sentenceIndex = Number(data.sentence_index ?? 0);
+          const audioBase64 =
+            typeof data.audio_base64 === "string" ? data.audio_base64 : "";
+          if (!audioBase64 || audioBase64.length === 0) {
+            turn.droppedChunks += 1;
+            logIara("iara.ws tts.audio dropped", "warn", {
+              reason: "missing_audio_base64",
+              turn_id: turn.turnId,
+              sentence_index: sentenceIndex,
+              session_id: iaraSessionIdRef.current,
+            });
+            return;
+          }
+          if (!Number.isFinite(sentenceIndex)) {
+            turn.droppedChunks += 1;
+            logIara("iara.ws tts.audio dropped", "warn", {
+              reason: "invalid_sentence_index",
+              turn_id: turn.turnId,
+              session_id: iaraSessionIdRef.current,
+            });
+            return;
+          }
+          let bytes: Uint8Array;
+          try {
+            bytes = base64ToUint8(audioBase64);
+          } catch (err) {
+            turn.droppedChunks += 1;
+            logIara("iara.ws tts.audio dropped", "warn", {
+              reason: "decode_fail",
+              turn_id: turn.turnId,
+              sentence_index: sentenceIndex,
+              session_id: iaraSessionIdRef.current,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            return;
+          }
+          if (bytes.byteLength === 0) {
+            turn.droppedChunks += 1;
+            logIara("iara.ws tts.audio dropped", "warn", {
+              reason: "decoded_empty",
+              turn_id: turn.turnId,
+              sentence_index: sentenceIndex,
+              session_id: iaraSessionIdRef.current,
+            });
+            return;
+          }
+          if (bytes.byteLength % 2 !== 0) {
+            turn.droppedChunks += 1;
+            logIara("iara.ws tts.audio dropped", "warn", {
+              reason: "pcm_not_int16_aligned",
+              turn_id: turn.turnId,
+              sentence_index: sentenceIndex,
+              session_id: iaraSessionIdRef.current,
+              decoded_bytes: bytes.byteLength,
+            });
+            return;
+          }
+          if (nextSentenceIndexRef.current == null) {
+            nextSentenceIndexRef.current = sentenceIndex;
+          }
+          const existing = sentenceMapRef.current.get(sentenceIndex) ?? [];
+          existing.push(bytes);
+          sentenceMapRef.current.set(sentenceIndex, existing);
+          queueDepthRef.current += 1;
+          turn.chunksReceived += 1;
+          logIara("iara.ws tts.audio.received", "debug", {
+            type,
             turn_id: turn.turnId,
-            sentence_index: sentenceIndex,
             session_id: iaraSessionIdRef.current,
-          });
-          return;
-        }
-        if (bytes.byteLength % 2 !== 0) {
-          turn.droppedChunks += 1;
-          logIara("iara.ws tts.audio dropped", "warn", {
-            reason: "pcm_not_int16_aligned",
-            turn_id: turn.turnId,
             sentence_index: sentenceIndex,
-            session_id: iaraSessionIdRef.current,
+            sample_rate:
+              typeof data.sample_rate === "number"
+                ? data.sample_rate
+                : IARA_SAMPLE_RATE,
+            received_bytes:
+              typeof data.audio_bytes === "number"
+                ? data.audio_bytes
+                : bytes.byteLength,
             decoded_bytes: bytes.byteLength,
+            first_16_hex: firstBytesHex(bytes, 16),
+            queue_depth: queueDepthRef.current,
+            event_id: turn.eventId,
+            playback_start_ms:
+              playbackStartedAtRef.current != null
+                ? playbackStartedAtRef.current - turn.startedAtMs
+                : null,
+            barge_in_count: bargeInCountRef.current,
           });
-          return;
+          flushPlayback();
+        } else if (type === "tts.truncated") {
+          turn.truncated = true;
+        } else if (type === "turn.cancelled") {
+          turn.cancelled = true;
+          turnCompletedRef.current = true;
+          maybeSendSpeakEnd();
+        } else if (type === "turn.completed") {
+          turnCompletedRef.current = true;
+          maybeSendSpeakEnd();
+        } else if (type === "session.reset.completed") {
+          logIara("iara.ws session.reset.completed", "info", {
+            session_id: iaraSessionIdRef.current,
+          });
+        } else if (type === "error") {
+          const message =
+            typeof data.message === "string" ? data.message : "iara ws error";
+          const code = typeof data.code === "string" ? data.code : undefined;
+          logIara("iara.ws error event", "error", {
+            type,
+            turn_id: turn.turnId,
+            session_id: iaraSessionIdRef.current,
+            code,
+            message,
+            payload: data,
+          });
+          // Keep the hook healthy for next turn even after upstream failure.
+          turnCompletedRef.current = true;
+          sentenceMapRef.current.clear();
+          queueDepthRef.current = 0;
+          maybeSendSpeakEnd();
         }
-        if (nextSentenceIndexRef.current == null) {
-          nextSentenceIndexRef.current = sentenceIndex;
-        }
-        const existing = sentenceMapRef.current.get(sentenceIndex) ?? [];
-        existing.push(bytes);
-        sentenceMapRef.current.set(sentenceIndex, existing);
-        queueDepthRef.current += 1;
-        turn.chunksReceived += 1;
-        logIara("iara.ws tts.audio.received", "debug", {
-          type,
-          turn_id: turn.turnId,
-          session_id: iaraSessionIdRef.current,
-          sentence_index: sentenceIndex,
-          sample_rate:
-            typeof data.sample_rate === "number"
-              ? data.sample_rate
-              : IARA_SAMPLE_RATE,
-          received_bytes:
-            typeof data.audio_bytes === "number"
-              ? data.audio_bytes
-              : bytes.byteLength,
-          decoded_bytes: bytes.byteLength,
-          first_16_hex: firstBytesHex(bytes, 16),
-          queue_depth: queueDepthRef.current,
-          event_id: turn.eventId,
-          playback_start_ms:
-            playbackStartedAtRef.current != null
-              ? playbackStartedAtRef.current - turn.startedAtMs
-              : null,
-          barge_in_count: bargeInCountRef.current,
-        });
-        flushPlayback();
-      } else if (type === "tts.truncated") {
-        turn.truncated = true;
-      } else if (type === "turn.cancelled") {
-        turn.cancelled = true;
-        turnCompletedRef.current = true;
-        maybeSendSpeakEnd();
-      } else if (type === "turn.completed") {
-        turnCompletedRef.current = true;
-        maybeSendSpeakEnd();
-      } else if (type === "session.reset.completed") {
-        logIara("iara.ws session.reset.completed", "info", {
+      };
+
+      ws.onclose = (ev) => {
+        if (tornDownRef.current) return;
+        logIara("iara.ws closed", "warn", {
+          code: ev.code,
+          reason: ev.reason || undefined,
           session_id: iaraSessionIdRef.current,
         });
-      } else if (type === "error") {
-        const message =
-          typeof data.message === "string" ? data.message : "iara ws error";
-        const code = typeof data.code === "string" ? data.code : undefined;
-        logIara("iara.ws error event", "error", {
-          type,
-          turn_id: turn.turnId,
+      };
+
+      ws.onerror = () => {
+        if (tornDownRef.current) return;
+        logIara("iara.ws error", "error", {
           session_id: iaraSessionIdRef.current,
-          code,
-          message,
-          payload: data,
         });
-        // Keep the hook healthy for next turn even after upstream failure.
-        turnCompletedRef.current = true;
-        sentenceMapRef.current.clear();
-        queueDepthRef.current = 0;
-        maybeSendSpeakEnd();
-      }
+      };
     };
 
-    ws.onclose = (ev) => {
-      if (cancelled) return;
-      logIara("iara.ws closed", "warn", {
-        code: ev.code,
-        reason: ev.reason || undefined,
-        session_id: iaraSessionIdRef.current,
-      });
-    };
-
-    ws.onerror = () => {
-      if (cancelled) return;
-      logIara("iara.ws error", "error", {
-        session_id: iaraSessionIdRef.current,
-      });
-    };
+    if (!wsRef.current) {
+      connectWs();
+    }
 
     const startMic = async () => {
       try {
@@ -522,20 +592,23 @@ export function useIaraVoiceWs(
             autoGainControl: true,
           },
         });
-        if (cancelled) {
+        if (tornDownRef.current) {
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
         streamRef.current = stream;
         const audioContext = new AudioContext();
+        audioContextRef.current = audioContext;
         const source = audioContext.createMediaStreamSource(stream);
         const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        sourceRef.current = source;
+        processorRef.current = processor;
         source.connect(processor);
         processor.connect(audioContext.destination);
 
         processor.onaudioprocess = (e: AudioProcessingEvent) => {
           if (
-            cancelled ||
+            tornDownRef.current ||
             !wsRef.current ||
             wsRef.current.readyState !== WebSocket.OPEN
           )
@@ -557,8 +630,11 @@ export function useIaraVoiceWs(
             if (!speaking) {
               speaking = true;
               speechStartedAt = now;
-              session.startListening();
-              logLiveAvatar("iara.ws agent.start_listening", "debug");
+              const s = sessionRef.current;
+              if (s?.state === SessionState.CONNECTED) {
+                s.startListening();
+                logLiveAvatar("iara.ws agent.start_listening", "debug");
+              }
             }
             lastSpeechAt = now;
           }
@@ -588,11 +664,14 @@ export function useIaraVoiceWs(
             } else {
               speaking = false;
               appendedBytesThisTurn = 0;
-              session.stopListening();
-              logLiveAvatar(
-                "iara.ws agent.stop_listening (short speech drop)",
-                "debug",
-              );
+              const s = sessionRef.current;
+              if (s?.state === SessionState.CONNECTED) {
+                s.stopListening();
+                logLiveAvatar(
+                  "iara.ws agent.stop_listening (short speech drop)",
+                  "debug",
+                );
+              }
             }
           }
         };
@@ -603,16 +682,21 @@ export function useIaraVoiceWs(
       }
     };
 
-    startMic();
-
-    keepAliveIntervalRef.current = setInterval(() => {
-      if (sessionRef.current && !cancelled) {
-        sessionRef.current.sendSessionKeepAliveWs();
-      }
-    }, LIVEAVATAR_KEEP_ALIVE_MS);
+    if (
+      sessionState === SessionState.CONNECTED &&
+      sessionRef.current &&
+      wsRef.current &&
+      !streamRef.current
+    ) {
+      startMic();
+      keepAliveIntervalRef.current = setInterval(() => {
+        if (sessionRef.current && !tornDownRef.current) {
+          sessionRef.current.sendSessionKeepAliveWs();
+        }
+      }, LIVEAVATAR_KEEP_ALIVE_MS);
+    }
 
     return () => {
-      cancelled = true;
       if (keepAliveIntervalRef.current) {
         clearInterval(keepAliveIntervalRef.current);
         keepAliveIntervalRef.current = null;
@@ -621,22 +705,27 @@ export function useIaraVoiceWs(
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
       }
-      try {
-        wsRef.current?.send(
-          JSON.stringify({
-            type: "session.reset",
-            session_id: iaraSessionIdRef.current,
-          }),
-        );
-      } catch {
-        // ignore
+      if (processorRef.current) {
+        try {
+          processorRef.current.disconnect();
+        } catch {
+          // ignore
+        }
+        processorRef.current = null;
       }
-      try {
-        wsRef.current?.close();
-      } catch {
-        // ignore
+      if (sourceRef.current) {
+        try {
+          sourceRef.current.disconnect();
+        } catch {
+          // ignore
+        }
+        sourceRef.current = null;
       }
-      wsRef.current = null;
+      if (audioContextRef.current) {
+        void audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
+      }
+      // Do not close WS here; teardown effect handles it when DISCONNECTED.
     };
   }, [
     enabled,
