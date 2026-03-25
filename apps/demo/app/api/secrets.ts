@@ -30,6 +30,8 @@ const DEFAULTS = {
   IARA_API_URL: "",
   IARA_SYSTEM_PROMPT: "",
   IARA_PRESET_ID: "",
+  /** Browser-side AEC using session video playback as reference (True Lite / iara only). */
+  USE_AVATAR_AEC: false,
 } as const;
 
 export type Config = {
@@ -60,6 +62,7 @@ export type Config = {
   IARA_API_URL: string;
   IARA_SYSTEM_PROMPT: string;
   IARA_PRESET_ID: string;
+  USE_AVATAR_AEC: boolean;
 };
 
 function getConfigPath(): string {
@@ -114,6 +117,10 @@ export function getConfig(): Config {
   if (process.env.USE_TRUE_LITE != null)
     fromEnv.USE_TRUE_LITE =
       process.env.USE_TRUE_LITE === "true" || process.env.USE_TRUE_LITE === "1";
+  if (process.env.USE_AVATAR_AEC != null)
+    fromEnv.USE_AVATAR_AEC =
+      process.env.USE_AVATAR_AEC === "true" ||
+      process.env.USE_AVATAR_AEC === "1";
   if (process.env.OPENAI_REALTIME_PROMPT_ID != null)
     fromEnv.OPENAI_REALTIME_PROMPT_ID = process.env.OPENAI_REALTIME_PROMPT_ID;
 
@@ -222,6 +229,11 @@ export function getConfig(): Config {
         fromFile.IARA_PRESET_ID === undefined
       )
         fromFile.IARA_PRESET_ID = String(anyFile.iara_preset_id);
+      if (
+        anyFile.use_avatar_aec !== undefined &&
+        fromFile.USE_AVATAR_AEC === undefined
+      )
+        fromFile.USE_AVATAR_AEC = Boolean(anyFile.use_avatar_aec);
     }
   } catch {
     // ignore parse errors; use defaults

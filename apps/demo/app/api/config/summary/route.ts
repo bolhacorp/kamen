@@ -118,5 +118,6 @@ export async function GET() {
     hasAvatarId: avatarId.length > 0,
     iaraWsUrl: config.USE_IARA ? iaraWsUrl || null : null,
     iaraApiUrl: config.USE_IARA ? iaraApiUrl || null : null,
+    avatarAecEnabled: config.USE_AVATAR_AEC === true,
   });
 }

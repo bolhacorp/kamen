@@ -32,6 +32,7 @@ type Config = {
   IARA_API_URL: string;
   IARA_SYSTEM_PROMPT: string;
   IARA_PRESET_ID: string;
+  USE_AVATAR_AEC: boolean;
 };
 
 const defaultConfig: Config = {
@@ -62,6 +63,7 @@ const defaultConfig: Config = {
   IARA_API_URL: "",
   IARA_SYSTEM_PROMPT: "",
   IARA_PRESET_ID: "",
+  USE_AVATAR_AEC: false,
 };
 
 const OPENAI_REALTIME_VOICES = [
@@ -1338,6 +1340,39 @@ export default function ConfigPage() {
                         </label>
                       </div>
                     </div>
+
+                    {(config.USE_TRUE_LITE || config.USE_IARA) && (
+                      <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-2">
+                        <div className="flex items-start gap-3">
+                          <input
+                            id="use-avatar-aec"
+                            type="checkbox"
+                            checked={config.USE_AVATAR_AEC}
+                            onChange={(e) =>
+                              setConfig((prev) => ({
+                                ...prev,
+                                USE_AVATAR_AEC: e.target.checked,
+                              }))
+                            }
+                            className="mt-1 rounded border-white/30"
+                          />
+                          <div>
+                            <label
+                              htmlFor="use-avatar-aec"
+                              className="text-sm text-gray-200 font-medium cursor-pointer"
+                            >
+                              Reduce avatar echo in microphone (experimental)
+                            </label>
+                            <p className="text-xs text-gray-500 mt-1">
+                              Uses playback from the session video as a
+                              reference for software echo cancellation. Applies
+                              to True Lite and Lite (iara) only; save settings
+                              for the demo to pick it up.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {config.USE_IARA && (
                       <div className="config-subsection space-y-4">
