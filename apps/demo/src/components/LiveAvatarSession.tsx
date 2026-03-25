@@ -55,6 +55,7 @@ function resolveIaraVoiceWsUrl(
 const LiveAvatarSessionComponent: React.FC<{
   mode: SessionMode;
   onSessionStopped: () => void;
+  aecEnabled?: boolean;
   iaraWsUrl?: string;
   iaraApiUrl?: string;
   iaraSystemPrompt?: string;
@@ -62,6 +63,7 @@ const LiveAvatarSessionComponent: React.FC<{
 }> = ({
   mode,
   onSessionStopped,
+  aecEnabled = false,
   iaraWsUrl,
   iaraApiUrl,
   iaraSystemPrompt,
@@ -83,6 +85,7 @@ const LiveAvatarSessionComponent: React.FC<{
   const { sessionRef } = useLiveAvatarContext();
   const wsEnabled = process.env.NEXT_PUBLIC_IARA_USE_VOICE_WS !== "false";
   const resolvedIaraVoiceWsUrl = resolveIaraVoiceWsUrl(iaraWsUrl, iaraApiUrl);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   const handleRealtimeReady = React.useCallback(() => {
     setVoiceSetupError(null);
@@ -100,12 +103,21 @@ const LiveAvatarSessionComponent: React.FC<{
     setVoiceSetupError(null);
   }, [mode]);
 
+  const aecOptions = React.useMemo(
+    () => ({
+      aecEnabled,
+      playbackVideoRef: videoRef,
+    }),
+    [aecEnabled],
+  );
+
   useTrueLiteRealtime(
     mode === "LITE_TRUE",
     sessionRef,
     sessionState,
     handleRealtimeReady,
     handleRealtimeError,
+    aecOptions,
   );
   useIaraVoiceWs(
     mode === "LITE_IARA" && wsEnabled && !!resolvedIaraVoiceWsUrl,
@@ -115,6 +127,7 @@ const LiveAvatarSessionComponent: React.FC<{
     iaraSystemPrompt,
     iaraPresetId,
     handleIaraReady,
+    aecOptions,
   );
   useIaraVoiceApi(
     mode === "LITE_IARA" &&
@@ -123,6 +136,7 @@ const LiveAvatarSessionComponent: React.FC<{
     sessionRef,
     sessionState,
     handleIaraReady,
+    aecOptions,
   );
   const {
     isAvatarTalking,
@@ -157,7 +171,6 @@ const LiveAvatarSessionComponent: React.FC<{
         ? "LITE"
         : mode;
   const { sendMessage } = useTextChat(textChatMode);
-  const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     if (sessionState === SessionState.DISCONNECTED) {
@@ -364,6 +377,7 @@ export const LiveAvatarSession: React.FC<{
   sessionAccessToken: string;
   onSessionStopped: () => void;
   voiceChatConfig?: boolean | VoiceChatConfig;
+  aecEnabled?: boolean;
   iaraWsUrl?: string;
   iaraApiUrl?: string;
   iaraSystemPrompt?: string;
@@ -374,6 +388,7 @@ export const LiveAvatarSession: React.FC<{
   sessionAccessToken,
   onSessionStopped,
   voiceChatConfig = true,
+  aecEnabled = false,
   iaraWsUrl,
   iaraApiUrl,
   iaraSystemPrompt,
@@ -388,6 +403,7 @@ export const LiveAvatarSession: React.FC<{
       <LiveAvatarSessionComponent
         mode={mode}
         onSessionStopped={onSessionStopped}
+        aecEnabled={aecEnabled}
         iaraWsUrl={iaraWsUrl}
         iaraApiUrl={iaraApiUrl}
         iaraSystemPrompt={iaraSystemPrompt}

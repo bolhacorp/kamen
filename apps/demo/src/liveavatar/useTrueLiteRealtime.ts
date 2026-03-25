@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { LiveAvatarSession } from "@heygen/liveavatar-web-sdk";
 import { SessionState } from "@heygen/liveavatar-web-sdk";
+import { createAvatarAecMicCaptureGraph } from "../audio/avatarAecGraph";
 import { logOpenAI, logLiveAvatar } from "../pipeline-log";
 
 /** ~1s of PCM 24kHz 16-bit mono in base64: 48000 bytes => 64000 chars. Flush when we have this much. */
@@ -18,13 +19,21 @@ function isLiteVoiceActive(state: SessionState): boolean {
   );
 }
 
+export type TrueLiteRealtimeOptions = {
+  aecEnabled?: boolean;
+  playbackVideoRef?: React.RefObject<HTMLVideoElement | null>;
+};
+
 export function useTrueLiteRealtime(
   enabled: boolean,
   sessionRef: React.RefObject<LiveAvatarSession | null>,
   sessionState: SessionState,
   onRealtimeReady?: () => void,
   onRealtimeError?: (message: string) => void,
+  options?: TrueLiteRealtimeOptions,
 ) {
+  const aecEnabled = options?.aecEnabled === true;
+  const playbackVideoRef = options?.playbackVideoRef;
   const wsRef = useRef<WebSocket | null>(null);
   const audioBufferRef = useRef<string>("");
   const currentEventIdRef = useRef<string | null>(null);
@@ -43,6 +52,7 @@ export function useTrueLiteRealtime(
   const realtimeReadyCalledRef = useRef(false);
   const realtimeErrorReportedRef = useRef(false);
   const tornDownRef = useRef(false);
+  const aecDisposeRef = useRef<(() => void) | null>(null);
   onRealtimeReadyRef.current = onRealtimeReady;
   onRealtimeErrorRef.current = onRealtimeError;
 
@@ -72,6 +82,15 @@ export function useTrueLiteRealtime(
     if (keepAliveIntervalRef.current) {
       clearInterval(keepAliveIntervalRef.current);
       keepAliveIntervalRef.current = null;
+    }
+
+    if (aecDisposeRef.current) {
+      try {
+        aecDisposeRef.current();
+      } catch {
+        // ignore
+      }
+      aecDisposeRef.current = null;
     }
 
     if (streamRef.current) {
@@ -400,61 +419,146 @@ export function useTrueLiteRealtime(
           return;
         }
         streamRef.current = stream;
-        const audioContext = new AudioContext();
-        audioContextRef.current = audioContext;
-        const sampleRate = audioContext.sampleRate;
-        logOpenAI("Microphone acquired, creating pipeline to OpenAI", "info", {
-          sampleRate,
-          downsample: sampleRate === 48000 ? 2 : 1,
-        });
-        const source = audioContext.createMediaStreamSource(stream);
-        const processor = audioContext.createScriptProcessor(4096, 1, 1);
-        sourceRef.current = source;
-        processorRef.current = processor;
-        source.connect(processor);
-        processor.connect(audioContext.destination);
-        const downsample = sampleRate === 48000 ? 2 : 1;
-        processor.onaudioprocess = (e: AudioProcessingEvent) => {
-          if (
-            !wsRef.current ||
-            wsRef.current.readyState !== WebSocket.OPEN ||
-            cancelled ||
-            tornDownRef.current
-          ) {
+
+        const videoEl = playbackVideoRef?.current ?? null;
+        if (aecEnabled && !videoEl) {
+          logOpenAI(
+            "Avatar AEC enabled but video element missing; using legacy mic path",
+            "warn",
+          );
+        }
+        if (aecEnabled && videoEl) {
+          const graph = await createAvatarAecMicCaptureGraph(stream, videoEl);
+          if (graph && (cancelled || tornDownRef.current)) {
+            graph.dispose();
+            void graph.audioContext.close().catch(() => {});
+            stream.getTracks().forEach((t) => t.stop());
             return;
           }
-          const input = e.inputBuffer.getChannelData(0);
-          const len =
-            downsample === 2 ? Math.floor(input.length / 2) : input.length;
-          const pcm16 = new Int16Array(len);
-          for (let i = 0; i < len; i++) {
-            const idx = downsample === 2 ? i * 2 : i;
-            const s = Math.max(-1, Math.min(1, input[idx] ?? 0));
-            pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-          }
-          const bytes = new Uint8Array(pcm16.buffer);
-          let binary = "";
-          for (let i = 0; i < bytes.length; i++) {
-            binary += String.fromCharCode(bytes[i] ?? 0);
-          }
-          const base64 = btoa(binary);
-          wsRef.current.send(
-            JSON.stringify({
-              type: "input_audio_buffer.append",
-              audio: base64,
-            }),
-          );
-          inputAppendCountRef.current += 1;
-          if (inputAppendCountRef.current % 100 === 1) {
+          if (graph && !cancelled && !tornDownRef.current) {
+            aecDisposeRef.current = graph.dispose;
+            audioContextRef.current = graph.audioContext;
+            processorRef.current = graph.processor;
+            sourceRef.current = null;
+            const sampleRate = graph.audioContext.sampleRate;
             logOpenAI(
-              "Orchestrator -> OpenAI: input_audio_buffer.append (batched count)",
-              "debug",
-              {
-                appendCount: inputAppendCountRef.current,
-              },
+              "Microphone acquired (avatar-referenced AEC), pipeline to OpenAI",
+              "info",
+              { sampleRate, downsample: sampleRate === 48000 ? 2 : 1 },
+            );
+            const downsample = sampleRate === 48000 ? 2 : 1;
+            graph.processor.onaudioprocess = (e: AudioProcessingEvent) => {
+              if (
+                !wsRef.current ||
+                wsRef.current.readyState !== WebSocket.OPEN ||
+                cancelled ||
+                tornDownRef.current
+              ) {
+                return;
+              }
+              const input = e.inputBuffer.getChannelData(0);
+              const len =
+                downsample === 2 ? Math.floor(input.length / 2) : input.length;
+              const pcm16 = new Int16Array(len);
+              for (let i = 0; i < len; i++) {
+                const idx = downsample === 2 ? i * 2 : i;
+                const s = Math.max(-1, Math.min(1, input[idx] ?? 0));
+                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+              }
+              const bytes = new Uint8Array(pcm16.buffer);
+              let binary = "";
+              for (let i = 0; i < bytes.length; i++) {
+                binary += String.fromCharCode(bytes[i] ?? 0);
+              }
+              const base64 = btoa(binary);
+              wsRef.current.send(
+                JSON.stringify({
+                  type: "input_audio_buffer.append",
+                  audio: base64,
+                }),
+              );
+              inputAppendCountRef.current += 1;
+              if (inputAppendCountRef.current % 100 === 1) {
+                logOpenAI(
+                  "Orchestrator -> OpenAI: input_audio_buffer.append (batched count)",
+                  "debug",
+                  {
+                    appendCount: inputAppendCountRef.current,
+                  },
+                );
+              }
+            };
+          } else if (aecEnabled && !cancelled) {
+            logOpenAI(
+              "Avatar AEC graph failed or unavailable; using legacy mic path",
+              "warn",
+              { hasVideo: !!videoEl },
             );
           }
-        };
+        }
+
+        if (!processorRef.current) {
+          aecDisposeRef.current = null;
+          const audioContext = new AudioContext();
+          audioContextRef.current = audioContext;
+          const sampleRate = audioContext.sampleRate;
+          logOpenAI(
+            "Microphone acquired, creating pipeline to OpenAI",
+            "info",
+            {
+              sampleRate,
+              downsample: sampleRate === 48000 ? 2 : 1,
+            },
+          );
+          const source = audioContext.createMediaStreamSource(stream);
+          const processor = audioContext.createScriptProcessor(4096, 1, 1);
+          sourceRef.current = source;
+          processorRef.current = processor;
+          source.connect(processor);
+          processor.connect(audioContext.destination);
+          const downsample = sampleRate === 48000 ? 2 : 1;
+          processor.onaudioprocess = (e: AudioProcessingEvent) => {
+            if (
+              !wsRef.current ||
+              wsRef.current.readyState !== WebSocket.OPEN ||
+              cancelled ||
+              tornDownRef.current
+            ) {
+              return;
+            }
+            const input = e.inputBuffer.getChannelData(0);
+            const len =
+              downsample === 2 ? Math.floor(input.length / 2) : input.length;
+            const pcm16 = new Int16Array(len);
+            for (let i = 0; i < len; i++) {
+              const idx = downsample === 2 ? i * 2 : i;
+              const s = Math.max(-1, Math.min(1, input[idx] ?? 0));
+              pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            }
+            const bytes = new Uint8Array(pcm16.buffer);
+            let binary = "";
+            for (let i = 0; i < bytes.length; i++) {
+              binary += String.fromCharCode(bytes[i] ?? 0);
+            }
+            const base64 = btoa(binary);
+            wsRef.current.send(
+              JSON.stringify({
+                type: "input_audio_buffer.append",
+                audio: base64,
+              }),
+            );
+            inputAppendCountRef.current += 1;
+            if (inputAppendCountRef.current % 100 === 1) {
+              logOpenAI(
+                "Orchestrator -> OpenAI: input_audio_buffer.append (batched count)",
+                "debug",
+                {
+                  appendCount: inputAppendCountRef.current,
+                },
+              );
+            }
+          };
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logOpenAI("Microphone failed", "error", { error: msg });
@@ -487,6 +591,14 @@ export function useTrueLiteRealtime(
       if (keepAliveIntervalRef.current) {
         clearInterval(keepAliveIntervalRef.current);
         keepAliveIntervalRef.current = null;
+      }
+      if (aecDisposeRef.current) {
+        try {
+          aecDisposeRef.current();
+        } catch {
+          // ignore
+        }
+        aecDisposeRef.current = null;
       }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
@@ -521,5 +633,7 @@ export function useTrueLiteRealtime(
     sessionRef,
     reportRealtimeError,
     resetRuntimeState,
+    aecEnabled,
+    playbackVideoRef,
   ]);
 }

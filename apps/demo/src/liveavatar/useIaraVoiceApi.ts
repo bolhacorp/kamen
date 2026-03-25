@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import type { LiveAvatarSession } from "@heygen/liveavatar-web-sdk";
 import { SessionState } from "@heygen/liveavatar-web-sdk";
+import { createAvatarAecMicCaptureGraph } from "../audio/avatarAecGraph";
 import { logIara, logLiveAvatar } from "../pipeline-log";
 
 const LIVEAVATAR_KEEP_ALIVE_MS = 2 * 60 * 1000; // 2 min
@@ -102,12 +103,20 @@ function resampleTo24kMono(
   return out;
 }
 
+export type IaraVoiceApiOptions = {
+  aecEnabled?: boolean;
+  playbackVideoRef?: React.RefObject<HTMLVideoElement | null>;
+};
+
 export function useIaraVoiceApi(
   enabled: boolean,
   sessionRef: React.RefObject<LiveAvatarSession | null>,
   sessionState: SessionState,
   onIaraReady?: () => void,
+  options?: IaraVoiceApiOptions,
 ) {
+  const aecEnabled = options?.aecEnabled === true;
+  const playbackVideoRef = options?.playbackVideoRef;
   const streamRef = useRef<MediaStream | null>(null);
   const bufferRef = useRef<number[]>([]);
   const inFlightRef = useRef(false);
@@ -122,6 +131,7 @@ export function useIaraVoiceApi(
   const audioContextRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const aecDisposeRef = useRef<(() => void) | null>(null);
   const onIaraReadyRef = useRef(onIaraReady);
   const iaraApiReadyCalledRef = useRef(false);
   onIaraReadyRef.current = onIaraReady;
@@ -321,6 +331,48 @@ export function useIaraVoiceApi(
       }
     };
 
+    const bindVoiceApiProcessor = (
+      processor: ScriptProcessorNode,
+      sampleRate: number,
+    ) => {
+      processor.onaudioprocess = (e: AudioProcessingEvent) => {
+        if (cancelled) return;
+        const now = Date.now();
+        if (bufferRef.current.length >= MAX_SAMPLES) return; // cap
+        const input = e.inputBuffer.getChannelData(0);
+        const resampled = resampleTo24kMono(input, sampleRate);
+        const len = resampled.length;
+        let energy = 0;
+        for (let i = 0; i < len; i++) {
+          const s = Math.max(-1, Math.min(1, resampled[i] ?? 0));
+          energy += s * s;
+          bufferRef.current.push(s < 0 ? s * 0x8000 : s * 0x7fff);
+        }
+        const rms = Math.sqrt(energy / Math.max(1, len));
+        if (rms >= VAD_RMS_THRESHOLD) {
+          lastSpeechAtRef.current = now;
+          if (speechStartedAtRef.current == null)
+            speechStartedAtRef.current = now;
+          if (!avatarListeningRef.current && sessionRef.current) {
+            sessionRef.current.startListening();
+            avatarListeningRef.current = true;
+            logLiveAvatar("iara Voice API: agent.start_listening", "debug");
+          }
+        } else if (
+          avatarListeningRef.current &&
+          now - lastSpeechAtRef.current > LISTENING_HOLD_MS &&
+          sessionRef.current
+        ) {
+          sessionRef.current.stopListening();
+          avatarListeningRef.current = false;
+          logLiveAvatar(
+            "iara Voice API: agent.stop_listening (silence)",
+            "debug",
+          );
+        }
+      };
+    };
+
     const startMic = async () => {
       try {
         logIara("iara Voice API: requesting microphone", "info");
@@ -336,55 +388,66 @@ export function useIaraVoiceApi(
           return;
         }
         streamRef.current = stream;
-        const audioContext = new AudioContext();
-        audioContextRef.current = audioContext;
-        const sampleRate = audioContext.sampleRate;
-        logIara("iara Voice API: microphone acquired", "info", {
-          sampleRate,
-          targetRate: IARA_SAMPLE_RATE,
-        });
-        const source = audioContext.createMediaStreamSource(stream);
-        const processor = audioContext.createScriptProcessor(4096, 1, 1);
-        sourceRef.current = source;
-        processorRef.current = processor;
-        source.connect(processor);
-        processor.connect(audioContext.destination);
-        processor.onaudioprocess = (e: AudioProcessingEvent) => {
-          if (cancelled) return;
-          const now = Date.now();
-          if (bufferRef.current.length >= MAX_SAMPLES) return; // cap
-          const input = e.inputBuffer.getChannelData(0);
-          const resampled = resampleTo24kMono(input, sampleRate);
-          const len = resampled.length;
-          let energy = 0;
-          for (let i = 0; i < len; i++) {
-            const s = Math.max(-1, Math.min(1, resampled[i] ?? 0));
-            energy += s * s;
-            bufferRef.current.push(s < 0 ? s * 0x8000 : s * 0x7fff);
+
+        const videoEl = playbackVideoRef?.current ?? null;
+        if (aecEnabled && !videoEl) {
+          logIara(
+            "iara Voice API: AEC enabled but video element missing; legacy mic path",
+            "warn",
+          );
+        }
+
+        let sampleRate = 48000;
+
+        if (aecEnabled && videoEl) {
+          const graph = await createAvatarAecMicCaptureGraph(stream, videoEl);
+          if (graph && cancelled) {
+            graph.dispose();
+            void graph.audioContext.close().catch(() => {});
+            stream.getTracks().forEach((t) => t.stop());
+            return;
           }
-          const rms = Math.sqrt(energy / Math.max(1, len));
-          if (rms >= VAD_RMS_THRESHOLD) {
-            lastSpeechAtRef.current = now;
-            if (speechStartedAtRef.current == null)
-              speechStartedAtRef.current = now;
-            if (!avatarListeningRef.current && sessionRef.current) {
-              sessionRef.current.startListening();
-              avatarListeningRef.current = true;
-              logLiveAvatar("iara Voice API: agent.start_listening", "debug");
-            }
-          } else if (
-            avatarListeningRef.current &&
-            now - lastSpeechAtRef.current > LISTENING_HOLD_MS &&
-            sessionRef.current
-          ) {
-            sessionRef.current.stopListening();
-            avatarListeningRef.current = false;
-            logLiveAvatar(
-              "iara Voice API: agent.stop_listening (silence)",
-              "debug",
+          if (graph && !cancelled) {
+            aecDisposeRef.current = graph.dispose;
+            audioContextRef.current = graph.audioContext;
+            processorRef.current = graph.processor;
+            sourceRef.current = null;
+            sampleRate = graph.audioContext.sampleRate;
+            logIara(
+              "iara Voice API: microphone acquired (avatar AEC)",
+              "info",
+              {
+                sampleRate,
+                targetRate: IARA_SAMPLE_RATE,
+              },
+            );
+            bindVoiceApiProcessor(graph.processor, sampleRate);
+          } else if (aecEnabled) {
+            logIara(
+              "iara Voice API: AEC graph failed; legacy mic path",
+              "warn",
+              { hasVideo: !!videoEl },
             );
           }
-        };
+        }
+
+        if (!processorRef.current) {
+          aecDisposeRef.current = null;
+          const audioContext = new AudioContext();
+          audioContextRef.current = audioContext;
+          sampleRate = audioContext.sampleRate;
+          logIara("iara Voice API: microphone acquired", "info", {
+            sampleRate,
+            targetRate: IARA_SAMPLE_RATE,
+          });
+          const source = audioContext.createMediaStreamSource(stream);
+          const processor = audioContext.createScriptProcessor(4096, 1, 1);
+          sourceRef.current = source;
+          processorRef.current = processor;
+          source.connect(processor);
+          processor.connect(audioContext.destination);
+          bindVoiceApiProcessor(processor, sampleRate);
+        }
 
         sendIntervalRef.current = setInterval(maybeSend, SEND_INTERVAL_MS);
         logIara("iara Voice API: send timer started", "info", {
@@ -417,6 +480,14 @@ export function useIaraVoiceApi(
         clearInterval(keepAliveIntervalRef.current);
         keepAliveIntervalRef.current = null;
       }
+      if (aecDisposeRef.current) {
+        try {
+          aecDisposeRef.current();
+        } catch {
+          // ignore
+        }
+        aecDisposeRef.current = null;
+      }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
@@ -441,8 +512,8 @@ export function useIaraVoiceApi(
         void audioContextRef.current.close().catch(() => {});
         audioContextRef.current = null;
       }
-      if (avatarListeningRef.current && sessionRef.current) {
-        sessionRef.current.stopListening();
+      if (avatarListeningRef.current && session) {
+        session.stopListening();
         avatarListeningRef.current = false;
       }
       bufferRef.current = [];
@@ -450,5 +521,5 @@ export function useIaraVoiceApi(
       lastSpeechAtRef.current = 0;
       lastSendAtRef.current = 0;
     };
-  }, [enabled, sessionState, sessionRef]);
+  }, [enabled, sessionState, sessionRef, aecEnabled, playbackVideoRef]);
 }

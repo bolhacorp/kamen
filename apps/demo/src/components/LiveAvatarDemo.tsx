@@ -128,6 +128,8 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
   >("idle");
   const [micError, setMicError] = useState<string | null>(null);
   const [showLogViewer, setShowLogViewer] = useState(false);
+  /** Optional avatar echo cancellation for True Lite / iara Lite (default off). */
+  const [aecEnabled, setAecEnabled] = useState(false);
 
   const refreshSummary = useCallback(async () => {
     setSummaryLoading(true);
@@ -382,6 +384,39 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
                   {micStatus === "ok" && "OK"}
                   {micStatus === "error" && (micError ?? "Error")}
                 </li>
+                {(summary.startMode === "LITE_TRUE" ||
+                  summary.startMode === "LITE_IARA") && (
+                  <li
+                    style={{
+                      marginBottom: 6,
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 8,
+                    }}
+                  >
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 8,
+                        cursor: "pointer",
+                        fontWeight: 400,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={aecEnabled}
+                        onChange={(e) => setAecEnabled(e.target.checked)}
+                        style={{ marginTop: 2 }}
+                      />
+                      <span>
+                        Reduce avatar echo in microphone (experimental). Uses
+                        playback from the session video as a reference; applies
+                        to True Lite and Lite (iara) only.
+                      </span>
+                    </label>
+                  </li>
+                )}
                 {summary.error && (
                   <li style={{ color: "rgb(248 113 113)", marginTop: 8 }}>
                     {summary.error}
@@ -435,6 +470,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
             mode={mode}
             sessionAccessToken={sessionToken}
             voiceChatConfig={voiceChatConfig}
+            aecEnabled={aecEnabled}
             onSessionStopped={onSessionStopped}
             iaraWsUrl={mode === "LITE_IARA" ? iaraWsUrl : undefined}
             iaraApiUrl={mode === "LITE_IARA" ? iaraApiUrl : undefined}

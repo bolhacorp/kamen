@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import type { LiveAvatarSession } from "@heygen/liveavatar-web-sdk";
 import { SessionState } from "@heygen/liveavatar-web-sdk";
+import { createAvatarAecMicCaptureGraph } from "../audio/avatarAecGraph";
 import { logIara, logLiveAvatar } from "../pipeline-log";
 
 const IARA_SAMPLE_RATE = 24000;
@@ -123,6 +124,11 @@ function isIaraVoiceActive(state: SessionState): boolean {
   );
 }
 
+export type IaraVoiceWsOptions = {
+  aecEnabled?: boolean;
+  playbackVideoRef?: React.RefObject<HTMLVideoElement | null>;
+};
+
 export function useIaraVoiceWs(
   enabled: boolean,
   wsUrl: string,
@@ -131,7 +137,10 @@ export function useIaraVoiceWs(
   iaraSystemPrompt?: string,
   iaraPresetId?: string,
   onIaraReady?: () => void,
+  options?: IaraVoiceWsOptions,
 ) {
+  const aecEnabled = options?.aecEnabled === true;
+  const playbackVideoRef = options?.playbackVideoRef;
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const keepAliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
@@ -143,6 +152,7 @@ export function useIaraVoiceWs(
   const onIaraReadyRef = useRef(onIaraReady);
   const iaraReadyCalledRef = useRef(false);
   const tornDownRef = useRef(false);
+  const aecDisposeRef = useRef<(() => void) | null>(null);
   onIaraReadyRef.current = onIaraReady;
 
   const iaraSessionIdRef = useRef<string>(buildSessionId());
@@ -183,6 +193,18 @@ export function useIaraVoiceWs(
       wsRef.current = null;
     }
     iaraReadyCalledRef.current = false;
+    if (aecDisposeRef.current) {
+      try {
+        aecDisposeRef.current();
+      } catch {
+        // ignore
+      }
+      aecDisposeRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
     if (processorRef.current) {
       try {
         processorRef.current.disconnect();
@@ -583,6 +605,81 @@ export function useIaraVoiceWs(
       connectWs();
     }
 
+    const bindMicProcessor = (
+      processor: ScriptProcessorNode,
+      sampleRate: number,
+    ) => {
+      processor.onaudioprocess = (e: AudioProcessingEvent) => {
+        if (
+          tornDownRef.current ||
+          !wsRef.current ||
+          wsRef.current.readyState !== WebSocket.OPEN
+        )
+          return;
+        const now = Date.now();
+        const input = e.inputBuffer.getChannelData(0);
+        const resampled = resampleTo24kMono(input, sampleRate);
+        if (resampled.length === 0) return;
+
+        let energy = 0;
+        for (let i = 0; i < resampled.length; i++) {
+          const s = resampled[i] ?? 0;
+          energy += s * s;
+        }
+        const rms = Math.sqrt(energy / resampled.length);
+        const isSpeech = rms >= VAD_RMS_THRESHOLD;
+
+        if (isSpeech) {
+          if (!speaking) {
+            speaking = true;
+            speechStartedAt = now;
+            const s = sessionRef.current;
+            if (s?.state === SessionState.CONNECTED) {
+              s.startListening();
+              logLiveAvatar("iara.ws agent.start_listening", "debug");
+            }
+          }
+          lastSpeechAt = now;
+        }
+
+        const turn = turnRef.current;
+        const avatarPlaying = !!turn.eventId && !turn.speakEndSent;
+        if (isSpeech && avatarPlaying) {
+          cancelCurrentTurn("barge-in");
+        }
+
+        const inSpeechWindow =
+          speaking ||
+          (lastSpeechAt > 0 && now - lastSpeechAt <= VAD_HANGOVER_MS);
+        if (!inSpeechWindow) return;
+
+        const pcmBytes = floatToPcm16LeBytes(resampled);
+        wsRef.current.send(pcmBytes.buffer);
+        appendedBytesThisTurn += pcmBytes.byteLength;
+
+        if (
+          speaking &&
+          lastSpeechAt > 0 &&
+          now - lastSpeechAt > VAD_HANGOVER_MS
+        ) {
+          if (now - speechStartedAt >= MIN_SPEECH_MS) {
+            commitTurn();
+          } else {
+            speaking = false;
+            appendedBytesThisTurn = 0;
+            const s = sessionRef.current;
+            if (s?.state === SessionState.CONNECTED) {
+              s.stopListening();
+              logLiveAvatar(
+                "iara.ws agent.stop_listening (short speech drop)",
+                "debug",
+              );
+            }
+          }
+        }
+      };
+    };
+
     const startMic = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -597,84 +694,59 @@ export function useIaraVoiceWs(
           return;
         }
         streamRef.current = stream;
-        const audioContext = new AudioContext();
-        audioContextRef.current = audioContext;
-        const source = audioContext.createMediaStreamSource(stream);
-        const processor = audioContext.createScriptProcessor(4096, 1, 1);
-        sourceRef.current = source;
-        processorRef.current = processor;
-        source.connect(processor);
-        processor.connect(audioContext.destination);
 
-        processor.onaudioprocess = (e: AudioProcessingEvent) => {
-          if (
-            tornDownRef.current ||
-            !wsRef.current ||
-            wsRef.current.readyState !== WebSocket.OPEN
-          )
+        const videoEl = playbackVideoRef?.current ?? null;
+        if (aecEnabled && !videoEl) {
+          logIara(
+            "iara.ws: avatar AEC enabled but video element missing; legacy mic path",
+            "warn",
+          );
+        }
+
+        let processor: ScriptProcessorNode | null = null;
+        let sampleRate = 48000;
+
+        if (aecEnabled && videoEl) {
+          const graph = await createAvatarAecMicCaptureGraph(stream, videoEl);
+          if (graph && tornDownRef.current) {
+            graph.dispose();
+            void graph.audioContext.close().catch(() => {});
+            stream.getTracks().forEach((t) => t.stop());
             return;
-          const now = Date.now();
-          const input = e.inputBuffer.getChannelData(0);
-          const resampled = resampleTo24kMono(input, audioContext.sampleRate);
-          if (resampled.length === 0) return;
-
-          let energy = 0;
-          for (let i = 0; i < resampled.length; i++) {
-            const s = resampled[i] ?? 0;
-            energy += s * s;
           }
-          const rms = Math.sqrt(energy / resampled.length);
-          const isSpeech = rms >= VAD_RMS_THRESHOLD;
-
-          if (isSpeech) {
-            if (!speaking) {
-              speaking = true;
-              speechStartedAt = now;
-              const s = sessionRef.current;
-              if (s?.state === SessionState.CONNECTED) {
-                s.startListening();
-                logLiveAvatar("iara.ws agent.start_listening", "debug");
-              }
-            }
-            lastSpeechAt = now;
+          if (graph && !tornDownRef.current) {
+            aecDisposeRef.current = graph.dispose;
+            audioContextRef.current = graph.audioContext;
+            processorRef.current = graph.processor;
+            sourceRef.current = null;
+            processor = graph.processor;
+            sampleRate = graph.audioContext.sampleRate;
+            logIara("iara.ws: microphone with avatar-referenced AEC", "info", {
+              sampleRate,
+            });
+            bindMicProcessor(processor, sampleRate);
+          } else if (aecEnabled) {
+            logIara(
+              "iara.ws: AEC graph failed; using legacy mic path",
+              "warn",
+              { hasVideo: !!videoEl },
+            );
           }
+        }
 
-          const turn = turnRef.current;
-          const avatarPlaying = !!turn.eventId && !turn.speakEndSent;
-          if (isSpeech && avatarPlaying) {
-            cancelCurrentTurn("barge-in");
-          }
-
-          const inSpeechWindow =
-            speaking ||
-            (lastSpeechAt > 0 && now - lastSpeechAt <= VAD_HANGOVER_MS);
-          if (!inSpeechWindow) return;
-
-          const pcmBytes = floatToPcm16LeBytes(resampled);
-          wsRef.current.send(pcmBytes.buffer);
-          appendedBytesThisTurn += pcmBytes.byteLength;
-
-          if (
-            speaking &&
-            lastSpeechAt > 0 &&
-            now - lastSpeechAt > VAD_HANGOVER_MS
-          ) {
-            if (now - speechStartedAt >= MIN_SPEECH_MS) {
-              commitTurn();
-            } else {
-              speaking = false;
-              appendedBytesThisTurn = 0;
-              const s = sessionRef.current;
-              if (s?.state === SessionState.CONNECTED) {
-                s.stopListening();
-                logLiveAvatar(
-                  "iara.ws agent.stop_listening (short speech drop)",
-                  "debug",
-                );
-              }
-            }
-          }
-        };
+        if (!processor) {
+          aecDisposeRef.current = null;
+          const audioContext = new AudioContext();
+          audioContextRef.current = audioContext;
+          sampleRate = audioContext.sampleRate;
+          const source = audioContext.createMediaStreamSource(stream);
+          const sp = audioContext.createScriptProcessor(4096, 1, 1);
+          sourceRef.current = source;
+          processorRef.current = sp;
+          source.connect(sp);
+          sp.connect(audioContext.destination);
+          bindMicProcessor(sp, sampleRate);
+        }
       } catch (err) {
         logIara("iara.ws microphone failed", "error", {
           error: err instanceof Error ? err.message : String(err),
@@ -700,6 +772,14 @@ export function useIaraVoiceWs(
       if (keepAliveIntervalRef.current) {
         clearInterval(keepAliveIntervalRef.current);
         keepAliveIntervalRef.current = null;
+      }
+      if (aecDisposeRef.current) {
+        try {
+          aecDisposeRef.current();
+        } catch {
+          // ignore
+        }
+        aecDisposeRef.current = null;
       }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
@@ -734,5 +814,7 @@ export function useIaraVoiceWs(
     sessionState,
     iaraPresetId,
     iaraSystemPrompt,
+    aecEnabled,
+    playbackVideoRef,
   ]);
 }
