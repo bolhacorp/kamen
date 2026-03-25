@@ -12,6 +12,7 @@ import {
   useLiveAvatarContext,
 } from "../liveavatar";
 import { SessionState, VoiceChatConfig } from "@heygen/liveavatar-web-sdk";
+import type { IaraAudioSettings } from "../liveavatar/iaraAudioSettings";
 import { useAvatarActions } from "../liveavatar/useAvatarActions";
 import { Header } from "./Header";
 import { Loading } from "./Loading";
@@ -60,6 +61,7 @@ const LiveAvatarSessionComponent: React.FC<{
   iaraApiUrl?: string;
   iaraSystemPrompt?: string;
   iaraPresetId?: string;
+  iaraAudio?: IaraAudioSettings | null;
 }> = ({
   mode,
   onSessionStopped,
@@ -68,6 +70,7 @@ const LiveAvatarSessionComponent: React.FC<{
   iaraApiUrl,
   iaraSystemPrompt,
   iaraPresetId,
+  iaraAudio,
 }) => {
   const [message, setMessage] = useState("");
   const [realtimeReady, setRealtimeReady] = useState(false);
@@ -107,8 +110,9 @@ const LiveAvatarSessionComponent: React.FC<{
     () => ({
       aecEnabled,
       playbackVideoRef: videoRef,
+      iaraAudio: iaraAudio ?? undefined,
     }),
-    [aecEnabled],
+    [aecEnabled, iaraAudio],
   );
 
   useTrueLiteRealtime(
@@ -382,6 +386,7 @@ export const LiveAvatarSession: React.FC<{
   iaraApiUrl?: string;
   iaraSystemPrompt?: string;
   iaraPresetId?: string;
+  iaraAudio?: IaraAudioSettings | null;
 }> = ({
   apiUrl,
   mode,
@@ -393,6 +398,7 @@ export const LiveAvatarSession: React.FC<{
   iaraApiUrl,
   iaraSystemPrompt,
   iaraPresetId,
+  iaraAudio,
 }) => {
   return (
     <LiveAvatarContextProvider
@@ -408,6 +414,7 @@ export const LiveAvatarSession: React.FC<{
         iaraApiUrl={iaraApiUrl}
         iaraSystemPrompt={iaraSystemPrompt}
         iaraPresetId={iaraPresetId}
+        iaraAudio={iaraAudio}
       />
     </LiveAvatarContextProvider>
   );

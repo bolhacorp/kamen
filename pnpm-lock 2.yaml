@@ -60,9 +60,6 @@ importers:
       next:
         specifier: ^15.4.2
         version: 15.4.2(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
-      onnxruntime-web:
-        specifier: 1.24.3
-        version: 1.24.3
       react:
         specifier: ^19.1.0
         version: 19.1.0

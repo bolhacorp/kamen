@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "clean": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\"",
     "dev": "next dev --turbopack --port 3001",
     "build": "next build",
     "start": "next start",
@@ -11,7 +12,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ricky0123/vad-web": "0.0.29",
     "next": "^15.4.2",
+    "onnxruntime-web": "1.24.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
@@ -22,10 +25,10 @@
     "@types/node": "^22.15.3",
     "@types/react": "19.1.0",
     "@types/react-dom": "19.1.1",
+    "autoprefixer": "10.4.19",
     "eslint": "^9.31.0",
-    "typescript": "5.8.2",
     "postcss": "8.4.38",
     "tailwindcss": "^3.4.17",
-    "autoprefixer": "10.4.19"
+    "typescript": "5.8.2"
   }
 }

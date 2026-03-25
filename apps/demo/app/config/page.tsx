@@ -33,6 +33,21 @@ type Config = {
   IARA_SYSTEM_PROMPT: string;
   IARA_PRESET_ID: string;
   USE_AVATAR_AEC: boolean;
+  IARA_VAD_ENGINE: string;
+  SILERO_VAD_MODEL: string;
+  IARA_VAD_RMS_THRESHOLD: number;
+  IARA_VAD_HANGOVER_MS: number;
+  IARA_VAD_LISTENING_HOLD_MS: number;
+  IARA_VAD_MIN_SPEECH_MS: number;
+  SILERO_VAD_POSITIVE_SPEECH_THRESHOLD: number;
+  SILERO_VAD_NEGATIVE_SPEECH_THRESHOLD: number;
+  SILERO_VAD_REDEMPTION_MS: number;
+  SILERO_VAD_PRE_SPEECH_PAD_MS: number;
+  IARA_VOICE_API_MIN_BUFFER_MS: number;
+  IARA_WS_MIN_APPEND_MS: number;
+  OPENAI_REALTIME_VAD_THRESHOLD: number;
+  OPENAI_REALTIME_VAD_PREFIX_PADDING_MS: number;
+  OPENAI_REALTIME_VAD_SILENCE_DURATION_MS: number;
 };
 
 const defaultConfig: Config = {
@@ -64,6 +79,21 @@ const defaultConfig: Config = {
   IARA_SYSTEM_PROMPT: "",
   IARA_PRESET_ID: "",
   USE_AVATAR_AEC: false,
+  IARA_VAD_ENGINE: "rms",
+  SILERO_VAD_MODEL: "v5",
+  IARA_VAD_RMS_THRESHOLD: 0.015,
+  IARA_VAD_HANGOVER_MS: 450,
+  IARA_VAD_LISTENING_HOLD_MS: 450,
+  IARA_VAD_MIN_SPEECH_MS: 600,
+  SILERO_VAD_POSITIVE_SPEECH_THRESHOLD: 0.3,
+  SILERO_VAD_NEGATIVE_SPEECH_THRESHOLD: 0.25,
+  SILERO_VAD_REDEMPTION_MS: 1400,
+  SILERO_VAD_PRE_SPEECH_PAD_MS: 800,
+  IARA_VOICE_API_MIN_BUFFER_MS: 700,
+  IARA_WS_MIN_APPEND_MS: 100,
+  OPENAI_REALTIME_VAD_THRESHOLD: 0.5,
+  OPENAI_REALTIME_VAD_PREFIX_PADDING_MS: 300,
+  OPENAI_REALTIME_VAD_SILENCE_DURATION_MS: 500,
 };
 
 const OPENAI_REALTIME_VOICES = [
@@ -1371,6 +1401,338 @@ export default function ConfigPage() {
                             </p>
                           </div>
                         </div>
+                      </div>
+                    )}
+
+                    {(config.USE_IARA || config.USE_TRUE_LITE) && (
+                      <div className="config-subsection space-y-5">
+                        <h3 className="config-subsection-title">
+                          Voice activity (VAD) &amp; streaming
+                        </h3>
+
+                        {config.USE_IARA && (
+                          <>
+                            <p className="text-xs text-gray-500">
+                              Client-side gating for Lite (iara). Silero uses
+                              ONNX in the browser (CDN assets). Restart the demo
+                              session after saving.
+                            </p>
+                            <div>
+                              <label className="config-label">
+                                iara VAD engine
+                              </label>
+                              <select
+                                className="config-select"
+                                value={
+                                  config.IARA_VAD_ENGINE === "silero"
+                                    ? "silero"
+                                    : "rms"
+                                }
+                                onChange={(e) =>
+                                  update("IARA_VAD_ENGINE", e.target.value)
+                                }
+                              >
+                                <option value="rms">RMS energy (simple)</option>
+                                <option value="silero">
+                                  Silero (ML, @ricky0123/vad-web)
+                                </option>
+                              </select>
+                            </div>
+                            {config.IARA_VAD_ENGINE === "silero" && (
+                              <div>
+                                <label className="config-label">
+                                  Silero model
+                                </label>
+                                <select
+                                  className="config-select"
+                                  value={
+                                    config.SILERO_VAD_MODEL === "legacy"
+                                      ? "legacy"
+                                      : "v5"
+                                  }
+                                  onChange={(e) =>
+                                    update("SILERO_VAD_MODEL", e.target.value)
+                                  }
+                                >
+                                  <option value="v5">v5 (512-sample)</option>
+                                  <option value="legacy">
+                                    legacy (1536-sample)
+                                  </option>
+                                </select>
+                              </div>
+                            )}
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <div>
+                                <label className="config-label">
+                                  RMS threshold (0–1, when engine is RMS)
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.001"
+                                  min={0}
+                                  max={1}
+                                  value={config.IARA_VAD_RMS_THRESHOLD}
+                                  onChange={(e) =>
+                                    update(
+                                      "IARA_VAD_RMS_THRESHOLD",
+                                      Number(e.target.value),
+                                    )
+                                  }
+                                  className="config-input"
+                                />
+                              </div>
+                              <div>
+                                <label className="config-label">
+                                  Hangover (ms) — tail after speech
+                                </label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={config.IARA_VAD_HANGOVER_MS}
+                                  onChange={(e) =>
+                                    update(
+                                      "IARA_VAD_HANGOVER_MS",
+                                      Number(e.target.value),
+                                    )
+                                  }
+                                  className="config-input"
+                                />
+                              </div>
+                              <div>
+                                <label className="config-label">
+                                  Listening hold (ms) — Voice API only
+                                </label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={config.IARA_VAD_LISTENING_HOLD_MS}
+                                  onChange={(e) =>
+                                    update(
+                                      "IARA_VAD_LISTENING_HOLD_MS",
+                                      Number(e.target.value),
+                                    )
+                                  }
+                                  className="config-input"
+                                />
+                              </div>
+                              <div>
+                                <label className="config-label">
+                                  Min speech (ms)
+                                </label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={config.IARA_VAD_MIN_SPEECH_MS}
+                                  onChange={(e) =>
+                                    update(
+                                      "IARA_VAD_MIN_SPEECH_MS",
+                                      Number(e.target.value),
+                                    )
+                                  }
+                                  className="config-input"
+                                />
+                              </div>
+                            </div>
+                            {config.IARA_VAD_ENGINE === "silero" && (
+                              <div className="grid gap-3 sm:grid-cols-2 border-t border-white/10 pt-4">
+                                <div>
+                                  <label className="config-label">
+                                    Silero positive threshold (0–1)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min={0}
+                                    max={1}
+                                    value={
+                                      config.SILERO_VAD_POSITIVE_SPEECH_THRESHOLD
+                                    }
+                                    onChange={(e) =>
+                                      update(
+                                        "SILERO_VAD_POSITIVE_SPEECH_THRESHOLD",
+                                        Number(e.target.value),
+                                      )
+                                    }
+                                    className="config-input"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="config-label">
+                                    Silero negative threshold (0–1)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min={0}
+                                    max={1}
+                                    value={
+                                      config.SILERO_VAD_NEGATIVE_SPEECH_THRESHOLD
+                                    }
+                                    onChange={(e) =>
+                                      update(
+                                        "SILERO_VAD_NEGATIVE_SPEECH_THRESHOLD",
+                                        Number(e.target.value),
+                                      )
+                                    }
+                                    className="config-input"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="config-label">
+                                    Silero redemption (ms)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={config.SILERO_VAD_REDEMPTION_MS}
+                                    onChange={(e) =>
+                                      update(
+                                        "SILERO_VAD_REDEMPTION_MS",
+                                        Number(e.target.value),
+                                      )
+                                    }
+                                    className="config-input"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="config-label">
+                                    Silero pre-speech pad (ms, advanced)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={config.SILERO_VAD_PRE_SPEECH_PAD_MS}
+                                    onChange={(e) =>
+                                      update(
+                                        "SILERO_VAD_PRE_SPEECH_PAD_MS",
+                                        Number(e.target.value),
+                                      )
+                                    }
+                                    className="config-input"
+                                  />
+                                </div>
+                              </div>
+                            )}
+                            <div className="border-t border-white/10 pt-4 space-y-3">
+                              <h4 className="text-sm font-medium text-gray-300">
+                                Advanced streaming (iara, not VAD)
+                              </h4>
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <div>
+                                  <label className="config-label">
+                                    Voice API min buffer (ms)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    value={config.IARA_VOICE_API_MIN_BUFFER_MS}
+                                    onChange={(e) =>
+                                      update(
+                                        "IARA_VOICE_API_MIN_BUFFER_MS",
+                                        Number(e.target.value),
+                                      )
+                                    }
+                                    className="config-input"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="config-label">
+                                    WebSocket min append (ms)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    value={config.IARA_WS_MIN_APPEND_MS}
+                                    onChange={(e) =>
+                                      update(
+                                        "IARA_WS_MIN_APPEND_MS",
+                                        Number(e.target.value),
+                                      )
+                                    }
+                                    className="config-input"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        )}
+
+                        {config.USE_TRUE_LITE && (
+                          <div
+                            className={
+                              config.USE_IARA
+                                ? "border-t border-white/10 pt-4 space-y-3"
+                                : "space-y-3"
+                            }
+                          >
+                            <h4 className="text-sm font-medium text-gray-300">
+                              True LITE — OpenAI server VAD
+                            </h4>
+                            <p className="text-xs text-gray-500">
+                              Used when creating the Realtime client secret
+                              (turn_detection).
+                            </p>
+                            <div className="grid gap-3 sm:grid-cols-3">
+                              <div>
+                                <label className="config-label">
+                                  Threshold (0–1)
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.05"
+                                  min={0}
+                                  max={1}
+                                  value={config.OPENAI_REALTIME_VAD_THRESHOLD}
+                                  onChange={(e) =>
+                                    update(
+                                      "OPENAI_REALTIME_VAD_THRESHOLD",
+                                      Number(e.target.value),
+                                    )
+                                  }
+                                  className="config-input"
+                                />
+                              </div>
+                              <div>
+                                <label className="config-label">
+                                  Prefix padding (ms)
+                                </label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={
+                                    config.OPENAI_REALTIME_VAD_PREFIX_PADDING_MS
+                                  }
+                                  onChange={(e) =>
+                                    update(
+                                      "OPENAI_REALTIME_VAD_PREFIX_PADDING_MS",
+                                      Number(e.target.value),
+                                    )
+                                  }
+                                  className="config-input"
+                                />
+                              </div>
+                              <div>
+                                <label className="config-label">
+                                  Silence duration (ms)
+                                </label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={
+                                    config.OPENAI_REALTIME_VAD_SILENCE_DURATION_MS
+                                  }
+                                  onChange={(e) =>
+                                    update(
+                                      "OPENAI_REALTIME_VAD_SILENCE_DURATION_MS",
+                                      Number(e.target.value),
+                                    )
+                                  }
+                                  className="config-input"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 

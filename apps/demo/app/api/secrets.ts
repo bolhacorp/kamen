@@ -1,5 +1,9 @@
 import fs from "fs";
 import path from "path";
+import {
+  AUDIO_VAD_DEFAULTS,
+  applyAudioVadNormalization,
+} from "./audioVadConfig";
 
 /** Default values when no config file exists. Do not put real secrets here. */
 const DEFAULTS = {
@@ -32,6 +36,7 @@ const DEFAULTS = {
   IARA_PRESET_ID: "",
   /** Browser-side AEC using session video playback as reference (True Lite / iara only). */
   USE_AVATAR_AEC: false,
+  ...AUDIO_VAD_DEFAULTS,
 } as const;
 
 /** Normalize USE_AVATAR_AEC from JSON/env (handles true, "true", 1, etc.). */
@@ -75,6 +80,21 @@ export type Config = {
   IARA_SYSTEM_PROMPT: string;
   IARA_PRESET_ID: string;
   USE_AVATAR_AEC: boolean;
+  IARA_VAD_ENGINE: "rms" | "silero";
+  SILERO_VAD_MODEL: "v5" | "legacy";
+  IARA_VAD_RMS_THRESHOLD: number;
+  IARA_VAD_HANGOVER_MS: number;
+  IARA_VAD_LISTENING_HOLD_MS: number;
+  IARA_VAD_MIN_SPEECH_MS: number;
+  SILERO_VAD_POSITIVE_SPEECH_THRESHOLD: number;
+  SILERO_VAD_NEGATIVE_SPEECH_THRESHOLD: number;
+  SILERO_VAD_REDEMPTION_MS: number;
+  SILERO_VAD_PRE_SPEECH_PAD_MS: number;
+  IARA_VOICE_API_MIN_BUFFER_MS: number;
+  IARA_WS_MIN_APPEND_MS: number;
+  OPENAI_REALTIME_VAD_THRESHOLD: number;
+  OPENAI_REALTIME_VAD_PREFIX_PADDING_MS: number;
+  OPENAI_REALTIME_VAD_SILENCE_DURATION_MS: number;
 };
 
 function getConfigPath(): string {
@@ -256,12 +276,15 @@ export function getConfig(): Config {
     ...fromFile,
     ...fromEnv,
   };
-  return {
+  const withAec = {
     ...merged,
     USE_AVATAR_AEC: normalizeUseAvatarAec(
       (merged as Record<string, unknown>).USE_AVATAR_AEC,
     ),
-  } as Config;
+  };
+  return applyAudioVadNormalization(
+    withAec as Record<string, unknown>,
+  ) as Config;
 }
 
 /** Path where config is written (for POST /api/config). Resolves to app dir. */

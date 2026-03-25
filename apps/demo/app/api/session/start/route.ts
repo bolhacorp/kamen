@@ -1,4 +1,5 @@
 import { getConfig } from "../../secrets";
+import { buildIaraAudioForClient } from "../../iaraSessionAudio";
 
 const OPENAI_REALTIME_VOICES = [
   "alloy",
@@ -297,6 +298,8 @@ export async function POST() {
     iara_api_url?: string;
     iara_system_prompt?: string;
     iara_preset_id?: string;
+    /** Mic VAD / streaming snapshot for iara hooks (LITE_IARA only). */
+    iara_audio?: ReturnType<typeof buildIaraAudioForClient>;
   } = {
     session_token,
     session_id,
@@ -310,6 +313,7 @@ export async function POST() {
     if (prompt) body.iara_system_prompt = prompt;
     const presetId = (config.IARA_PRESET_ID ?? "").trim();
     if (presetId) body.iara_preset_id = presetId;
+    body.iara_audio = buildIaraAudioForClient(config);
   }
 
   return new Response(JSON.stringify(body), {

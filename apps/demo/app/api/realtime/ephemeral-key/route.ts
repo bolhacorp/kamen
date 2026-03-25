@@ -73,9 +73,9 @@ export async function POST() {
         format: { type: "audio/pcm", rate: 24000 },
         turn_detection: {
           type: "server_vad",
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 500,
+          threshold: config.OPENAI_REALTIME_VAD_THRESHOLD,
+          prefix_padding_ms: config.OPENAI_REALTIME_VAD_PREFIX_PADDING_MS,
+          silence_duration_ms: config.OPENAI_REALTIME_VAD_SILENCE_DURATION_MS,
         },
       },
       output: {

@@ -3,13 +3,14 @@
 import { useEffect, useRef } from "react";
 import type { LiveAvatarSession } from "@heygen/liveavatar-web-sdk";
 import { SessionState } from "@heygen/liveavatar-web-sdk";
+import { createIaraSileroVad } from "../audio/iaraSileroVad";
 import { createAvatarAecMicCaptureGraph } from "../audio/avatarAecGraph";
+import type { IaraAudioSettings } from "./iaraAudioSettings";
+import { mergeIaraAudio } from "./iaraAudioSettings";
 import { logIara, logLiveAvatar } from "../pipeline-log";
 
 const LIVEAVATAR_KEEP_ALIVE_MS = 2 * 60 * 1000; // 2 min
 const IARA_SAMPLE_RATE = 24000;
-/** Require at least ~700 ms of PCM before sending a turn. */
-const MIN_SEND_BYTES = 24_000 * 2 * 0.7; // 33_600
 /** Max 30 s of PCM (match iara API limit). */
 const MAX_SAMPLES = 24_000 * 30; // 720_000
 /** Drop oversized TTS payloads to avoid client memory spikes. */
@@ -34,15 +35,6 @@ const TTS_CHUNK_BYTES = 9_600;
 const SEND_INTERVAL_MS = 500;
 /** Do not send more than one turn per second. */
 const MIN_TURN_GAP_MS = 1000;
-/** Wait this much silence before closing a speech turn (VAD hangover). */
-const VAD_HANGOVER_MS = 450;
-/** Keep listening indicator briefly after speech energy drops. */
-const LISTENING_HOLD_MS = 450;
-/** Simple level threshold for speech activity (RMS on normalized float samples). */
-const VAD_RMS_THRESHOLD = 0.015;
-/** Ignore ultra-short detected speech (likely noise/clicks). */
-const MIN_SPEECH_MS = 600;
-
 function readIaraTraceHeaders(headers: Headers): Record<string, string> {
   const trace: Record<string, string> = {};
   for (const [key, value] of headers.entries()) {
@@ -106,6 +98,7 @@ function resampleTo24kMono(
 export type IaraVoiceApiOptions = {
   aecEnabled?: boolean;
   playbackVideoRef?: React.RefObject<HTMLVideoElement | null>;
+  iaraAudio?: IaraAudioSettings | null;
 };
 
 export function useIaraVoiceApi(
@@ -162,6 +155,36 @@ export function useIaraVoiceApi(
     }
     const session = sessionRef.current;
     let cancelled = false;
+    const audio = mergeIaraAudio(options?.iaraAudio ?? undefined);
+    const minSendBytes = Math.max(
+      1,
+      Math.round((IARA_SAMPLE_RATE * 2 * audio.voiceApiMinBufferMs) / 1000),
+    );
+    let audioChain: Promise<void> = Promise.resolve();
+    let activeSilero: Awaited<ReturnType<typeof createIaraSileroVad>> | null =
+      null;
+
+    const initSileroIfNeeded = async () => {
+      if (audio.engine !== "silero" || cancelled) return;
+      try {
+        activeSilero = await createIaraSileroVad({
+          model: audio.sileroModel,
+          frameOptions: {
+            positiveSpeechThreshold: audio.sileroPositiveThreshold,
+            negativeSpeechThreshold: audio.sileroNegativeThreshold,
+            redemptionMs: audio.sileroRedemptionMs,
+            preSpeechPadMs: audio.sileroPreSpeechPadMs,
+            minSpeechMs: audio.minSpeechMs,
+            submitUserSpeechOnPause: false,
+          },
+        });
+      } catch (err) {
+        logIara("iara Voice API: Silero VAD init failed; using RMS", "warn", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        activeSilero = null;
+      }
+    };
 
     const flushBuffer = (): Uint8Array | null => {
       if (bufferRef.current.length === 0) return null;
@@ -307,18 +330,18 @@ export function useIaraVoiceApi(
       const now = Date.now();
       if (now - lastSendAtRef.current < MIN_TURN_GAP_MS) return;
       if (lastSpeechAtRef.current === 0) return;
-      if (now - lastSpeechAtRef.current < VAD_HANGOVER_MS) return;
+      if (now - lastSpeechAtRef.current < audio.hangoverMs) return;
       const speechStartedAt =
         speechStartedAtRef.current ?? lastSpeechAtRef.current;
       const speechMs = Math.max(0, lastSpeechAtRef.current - speechStartedAt);
-      if (speechMs < MIN_SPEECH_MS) {
+      if (speechMs < audio.minSpeechMs) {
         bufferRef.current = [];
         speechStartedAtRef.current = null;
         lastSpeechAtRef.current = 0;
         return;
       }
       const pcm = flushBuffer();
-      if (pcm && pcm.length >= MIN_SEND_BYTES) {
+      if (pcm && pcm.length >= minSendBytes) {
         speechStartedAtRef.current = null;
         lastSpeechAtRef.current = 0;
         sendToVoiceApi(pcm);
@@ -337,39 +360,60 @@ export function useIaraVoiceApi(
     ) => {
       processor.onaudioprocess = (e: AudioProcessingEvent) => {
         if (cancelled) return;
-        const now = Date.now();
         if (bufferRef.current.length >= MAX_SAMPLES) return; // cap
         const input = e.inputBuffer.getChannelData(0);
         const resampled = resampleTo24kMono(input, sampleRate);
         const len = resampled.length;
-        let energy = 0;
         for (let i = 0; i < len; i++) {
           const s = Math.max(-1, Math.min(1, resampled[i] ?? 0));
-          energy += s * s;
           bufferRef.current.push(s < 0 ? s * 0x8000 : s * 0x7fff);
         }
-        const rms = Math.sqrt(energy / Math.max(1, len));
-        if (rms >= VAD_RMS_THRESHOLD) {
-          lastSpeechAtRef.current = now;
-          if (speechStartedAtRef.current == null)
-            speechStartedAtRef.current = now;
-          if (!avatarListeningRef.current && sessionRef.current) {
-            sessionRef.current.startListening();
-            avatarListeningRef.current = true;
-            logLiveAvatar("iara Voice API: agent.start_listening", "debug");
-          }
-        } else if (
-          avatarListeningRef.current &&
-          now - lastSpeechAtRef.current > LISTENING_HOLD_MS &&
-          sessionRef.current
-        ) {
-          sessionRef.current.stopListening();
-          avatarListeningRef.current = false;
-          logLiveAvatar(
-            "iara Voice API: agent.stop_listening (silence)",
-            "debug",
-          );
-        }
+        if (len === 0) return;
+
+        audioChain = audioChain
+          .then(async () => {
+            if (cancelled) return;
+            const now = Date.now();
+            let isSpeech: boolean;
+            if (activeSilero) {
+              await activeSilero.feedSamples24k(resampled);
+              isSpeech = activeSilero.isSpeaking();
+            } else {
+              let energy = 0;
+              for (let i = 0; i < len; i++) {
+                const s = Math.max(-1, Math.min(1, resampled[i] ?? 0));
+                energy += s * s;
+              }
+              const rms = Math.sqrt(energy / Math.max(1, len));
+              isSpeech = rms >= audio.rmsThreshold;
+            }
+            if (isSpeech) {
+              lastSpeechAtRef.current = now;
+              if (speechStartedAtRef.current == null)
+                speechStartedAtRef.current = now;
+              if (!avatarListeningRef.current && sessionRef.current) {
+                sessionRef.current.startListening();
+                avatarListeningRef.current = true;
+                logLiveAvatar("iara Voice API: agent.start_listening", "debug");
+              }
+            } else if (
+              avatarListeningRef.current &&
+              now - lastSpeechAtRef.current > audio.listeningHoldMs &&
+              sessionRef.current
+            ) {
+              sessionRef.current.stopListening();
+              avatarListeningRef.current = false;
+              logLiveAvatar(
+                "iara Voice API: agent.stop_listening (silence)",
+                "debug",
+              );
+            }
+          })
+          .catch((err) => {
+            logIara("iara Voice API: audio chain error", "warn", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
       };
     };
 
@@ -421,6 +465,12 @@ export function useIaraVoiceApi(
                 targetRate: IARA_SAMPLE_RATE,
               },
             );
+            await initSileroIfNeeded();
+            if (cancelled) {
+              void activeSilero?.dispose();
+              activeSilero = null;
+              return;
+            }
             bindVoiceApiProcessor(graph.processor, sampleRate);
           } else if (aecEnabled) {
             logIara(
@@ -446,13 +496,19 @@ export function useIaraVoiceApi(
           processorRef.current = processor;
           source.connect(processor);
           processor.connect(audioContext.destination);
+          await initSileroIfNeeded();
+          if (cancelled) {
+            void activeSilero?.dispose();
+            activeSilero = null;
+            return;
+          }
           bindVoiceApiProcessor(processor, sampleRate);
         }
 
         sendIntervalRef.current = setInterval(maybeSend, SEND_INTERVAL_MS);
         logIara("iara Voice API: send timer started", "info", {
           intervalMs: SEND_INTERVAL_MS,
-          minBytes: MIN_SEND_BYTES,
+          minBytes: minSendBytes,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -471,6 +527,9 @@ export function useIaraVoiceApi(
 
     return () => {
       cancelled = true;
+      void audioChain.catch(() => {});
+      void activeSilero?.dispose();
+      activeSilero = null;
       logIara("iara Voice API: cleanup", "info");
       if (sendIntervalRef.current) {
         clearInterval(sendIntervalRef.current);
@@ -521,5 +580,12 @@ export function useIaraVoiceApi(
       lastSpeechAtRef.current = 0;
       lastSendAtRef.current = 0;
     };
-  }, [enabled, sessionState, sessionRef, aecEnabled, playbackVideoRef]);
+  }, [
+    enabled,
+    sessionState,
+    sessionRef,
+    aecEnabled,
+    playbackVideoRef,
+    options?.iaraAudio,
+  ]);
 }

@@ -7,6 +7,7 @@ import { Header } from "./Header";
 import { Loading } from "./Loading";
 import { PipelineLogViewer } from "./PipelineLogViewer";
 import { SessionInteractivityMode } from "@heygen/liveavatar-web-sdk";
+import type { IaraAudioSettings } from "../liveavatar/iaraAudioSettings";
 import { logOrchestrator } from "../pipeline-log";
 
 export type SessionMode =
@@ -132,6 +133,9 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
   const [showLogViewer, setShowLogViewer] = useState(false);
   /** AEC flag for the active session, from POST /api/session/start (matches saved config at start time). */
   const [sessionAvatarAecEnabled, setSessionAvatarAecEnabled] = useState(false);
+  /** iara VAD/streaming snapshot from session start (LITE_IARA). */
+  const [sessionIaraAudio, setSessionIaraAudio] =
+    useState<IaraAudioSettings | null>(null);
 
   const refreshSummary = useCallback(async () => {
     setSummaryLoading(true);
@@ -221,6 +225,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
         iara_api_url?: string;
         iara_system_prompt?: string;
         iara_preset_id?: string;
+        iara_audio?: IaraAudioSettings;
       };
 
       if (!res.ok) {
@@ -252,11 +257,13 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
         setIaraApiUrl(data.iara_api_url ?? "");
         setIaraSystemPrompt(data.iara_system_prompt ?? "");
         setIaraPresetId(data.iara_preset_id ?? "");
+        setSessionIaraAudio(data.iara_audio ?? null);
       } else {
         setIaraWsUrl("");
         setIaraApiUrl("");
         setIaraSystemPrompt("");
         setIaraPresetId("");
+        setSessionIaraAudio(null);
       }
       setIsLoadingToken(false);
       logOrchestrator("Session token received, starting LiveAvatar", "info", {
@@ -276,6 +283,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
     logOrchestrator("Session stopped (user or disconnect)", "info");
     setSessionToken("");
     setSessionAvatarAecEnabled(false);
+    setSessionIaraAudio(null);
   }, []);
 
   const voiceChatConfig = useMemo(() => {
@@ -449,6 +457,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
             iaraPresetId={
               mode === "LITE_IARA" ? iaraPresetId || undefined : undefined
             }
+            iaraAudio={mode === "LITE_IARA" ? sessionIaraAudio : undefined}
           />
         </div>
       )}

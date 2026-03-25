@@ -3,15 +3,14 @@
 import { useEffect, useRef } from "react";
 import type { LiveAvatarSession } from "@heygen/liveavatar-web-sdk";
 import { SessionState } from "@heygen/liveavatar-web-sdk";
+import { createIaraSileroVad } from "../audio/iaraSileroVad";
 import { createAvatarAecMicCaptureGraph } from "../audio/avatarAecGraph";
+import type { IaraAudioSettings } from "./iaraAudioSettings";
+import { mergeIaraAudio } from "./iaraAudioSettings";
 import { logIara, logLiveAvatar } from "../pipeline-log";
 
 const IARA_SAMPLE_RATE = 24000;
 const LIVEAVATAR_KEEP_ALIVE_MS = 2 * 60 * 1000;
-const VAD_RMS_THRESHOLD = 0.015;
-const VAD_HANGOVER_MS = 450;
-const MIN_SPEECH_MS = 600;
-const MIN_APPEND_BYTES = 4_800; // ~100 ms @ 24k mono int16
 
 type IaraTurnState = {
   turnId: string | null;
@@ -127,6 +126,8 @@ function isIaraVoiceActive(state: SessionState): boolean {
 export type IaraVoiceWsOptions = {
   aecEnabled?: boolean;
   playbackVideoRef?: React.RefObject<HTMLVideoElement | null>;
+  /** From session start / Settings; merged with defaults in the hook. */
+  iaraAudio?: IaraAudioSettings | null;
 };
 
 export function useIaraVoiceWs(
@@ -238,6 +239,15 @@ export function useIaraVoiceWs(
       return;
 
     tornDownRef.current = false;
+    const audio = mergeIaraAudio(options?.iaraAudio ?? undefined);
+    const minAppendBytes = Math.max(
+      1,
+      Math.round((IARA_SAMPLE_RATE * 2 * audio.wsMinAppendMs) / 1000),
+    );
+    let audioChain: Promise<void> = Promise.resolve();
+    let activeSilero: Awaited<ReturnType<typeof createIaraSileroVad>> | null =
+      null;
+
     let speaking = false;
     let speechStartedAt = 0;
     let lastSpeechAt = 0;
@@ -370,7 +380,7 @@ export function useIaraVoiceWs(
 
     const commitTurn = () => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-      if (appendedBytesThisTurn < MIN_APPEND_BYTES) {
+      if (appendedBytesThisTurn < minAppendBytes) {
         appendedBytesThisTurn = 0;
         return;
       }
@@ -616,68 +626,105 @@ export function useIaraVoiceWs(
           wsRef.current.readyState !== WebSocket.OPEN
         )
           return;
-        const now = Date.now();
         const input = e.inputBuffer.getChannelData(0);
         const resampled = resampleTo24kMono(input, sampleRate);
         if (resampled.length === 0) return;
 
-        let energy = 0;
-        for (let i = 0; i < resampled.length; i++) {
-          const s = resampled[i] ?? 0;
-          energy += s * s;
-        }
-        const rms = Math.sqrt(energy / resampled.length);
-        const isSpeech = rms >= VAD_RMS_THRESHOLD;
-
-        if (isSpeech) {
-          if (!speaking) {
-            speaking = true;
-            speechStartedAt = now;
-            const s = sessionRef.current;
-            if (s?.state === SessionState.CONNECTED) {
-              s.startListening();
-              logLiveAvatar("iara.ws agent.start_listening", "debug");
+        audioChain = audioChain
+          .then(async () => {
+            if (tornDownRef.current) return;
+            const now = Date.now();
+            let isSpeech: boolean;
+            if (activeSilero) {
+              await activeSilero.feedSamples24k(resampled);
+              isSpeech = activeSilero.isSpeaking();
+            } else {
+              let energy = 0;
+              for (let i = 0; i < resampled.length; i++) {
+                const s = resampled[i] ?? 0;
+                energy += s * s;
+              }
+              const rms = Math.sqrt(energy / resampled.length);
+              isSpeech = rms >= audio.rmsThreshold;
             }
-          }
-          lastSpeechAt = now;
-        }
 
-        const turn = turnRef.current;
-        const avatarPlaying = !!turn.eventId && !turn.speakEndSent;
-        if (isSpeech && avatarPlaying) {
-          cancelCurrentTurn("barge-in");
-        }
-
-        const inSpeechWindow =
-          speaking ||
-          (lastSpeechAt > 0 && now - lastSpeechAt <= VAD_HANGOVER_MS);
-        if (!inSpeechWindow) return;
-
-        const pcmBytes = floatToPcm16LeBytes(resampled);
-        wsRef.current.send(pcmBytes.buffer);
-        appendedBytesThisTurn += pcmBytes.byteLength;
-
-        if (
-          speaking &&
-          lastSpeechAt > 0 &&
-          now - lastSpeechAt > VAD_HANGOVER_MS
-        ) {
-          if (now - speechStartedAt >= MIN_SPEECH_MS) {
-            commitTurn();
-          } else {
-            speaking = false;
-            appendedBytesThisTurn = 0;
-            const s = sessionRef.current;
-            if (s?.state === SessionState.CONNECTED) {
-              s.stopListening();
-              logLiveAvatar(
-                "iara.ws agent.stop_listening (short speech drop)",
-                "debug",
-              );
+            if (isSpeech) {
+              if (!speaking) {
+                speaking = true;
+                speechStartedAt = now;
+                const s = sessionRef.current;
+                if (s?.state === SessionState.CONNECTED) {
+                  s.startListening();
+                  logLiveAvatar("iara.ws agent.start_listening", "debug");
+                }
+              }
+              lastSpeechAt = now;
             }
-          }
-        }
+
+            const turn = turnRef.current;
+            const avatarPlaying = !!turn.eventId && !turn.speakEndSent;
+            if (isSpeech && avatarPlaying) {
+              cancelCurrentTurn("barge-in");
+            }
+
+            const inSpeechWindow =
+              speaking ||
+              (lastSpeechAt > 0 && now - lastSpeechAt <= audio.hangoverMs);
+            if (!inSpeechWindow) return;
+
+            const pcmBytes = floatToPcm16LeBytes(resampled);
+            wsRef.current?.send(pcmBytes.buffer);
+            appendedBytesThisTurn += pcmBytes.byteLength;
+
+            if (
+              speaking &&
+              lastSpeechAt > 0 &&
+              now - lastSpeechAt > audio.hangoverMs
+            ) {
+              if (now - speechStartedAt >= audio.minSpeechMs) {
+                commitTurn();
+              } else {
+                speaking = false;
+                appendedBytesThisTurn = 0;
+                const s = sessionRef.current;
+                if (s?.state === SessionState.CONNECTED) {
+                  s.stopListening();
+                  logLiveAvatar(
+                    "iara.ws agent.stop_listening (short speech drop)",
+                    "debug",
+                  );
+                }
+              }
+            }
+          })
+          .catch((err) => {
+            logIara("iara.ws audio chain error", "warn", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
       };
+    };
+
+    const initSileroIfNeeded = async () => {
+      if (audio.engine !== "silero" || tornDownRef.current) return;
+      try {
+        activeSilero = await createIaraSileroVad({
+          model: audio.sileroModel,
+          frameOptions: {
+            positiveSpeechThreshold: audio.sileroPositiveThreshold,
+            negativeSpeechThreshold: audio.sileroNegativeThreshold,
+            redemptionMs: audio.sileroRedemptionMs,
+            preSpeechPadMs: audio.sileroPreSpeechPadMs,
+            minSpeechMs: audio.minSpeechMs,
+            submitUserSpeechOnPause: false,
+          },
+        });
+      } catch (err) {
+        logIara("iara.ws: Silero VAD init failed; using RMS", "warn", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        activeSilero = null;
+      }
     };
 
     const startMic = async () => {
@@ -724,6 +771,12 @@ export function useIaraVoiceWs(
             logIara("iara.ws: microphone with avatar-referenced AEC", "info", {
               sampleRate,
             });
+            await initSileroIfNeeded();
+            if (tornDownRef.current) {
+              void activeSilero?.dispose();
+              activeSilero = null;
+              return;
+            }
             bindMicProcessor(processor, sampleRate);
           } else if (aecEnabled) {
             logIara(
@@ -745,6 +798,12 @@ export function useIaraVoiceWs(
           processorRef.current = sp;
           source.connect(sp);
           sp.connect(audioContext.destination);
+          await initSileroIfNeeded();
+          if (tornDownRef.current) {
+            void activeSilero?.dispose();
+            activeSilero = null;
+            return;
+          }
           bindMicProcessor(sp, sampleRate);
         }
       } catch (err) {
@@ -769,6 +828,9 @@ export function useIaraVoiceWs(
     }
 
     return () => {
+      void audioChain.catch(() => {});
+      void activeSilero?.dispose();
+      activeSilero = null;
       if (keepAliveIntervalRef.current) {
         clearInterval(keepAliveIntervalRef.current);
         keepAliveIntervalRef.current = null;
@@ -816,5 +878,6 @@ export function useIaraVoiceWs(
     iaraSystemPrompt,
     aecEnabled,
     playbackVideoRef,
+    options?.iaraAudio,
   ]);
 }

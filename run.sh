@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-# Resolve repo root (directory containing this script)
+# Repo root (this script lives at the repository root)
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 cd "$REPO_ROOT"
 

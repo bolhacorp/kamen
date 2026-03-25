@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-# Resolve repo root (directory containing this script)
+# Repo root (this script lives at the repository root)
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 cd "$REPO_ROOT"
 
@@ -51,14 +51,14 @@ else
   fi
 fi
 
-# --- First-time setup vs regular run ---
+# Local marker (gitignored): records that a full install+build completed; skip full rebuild until --full
 SETUP_DONE="$REPO_ROOT/.run-setup-done"
 
 if [[ ! -f "$SETUP_DONE" ]] || [[ "$FORCE_FULL" == true ]]; then
   echo "Full setup: installing dependencies and building..."
   $PNPM_CMD install
   $PNPM_CMD build
-  touch "$SETUP_DONE"
+  echo "completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$SETUP_DONE"
   echo "Setup complete."
 else
   echo "Installing dependencies (if needed)..."

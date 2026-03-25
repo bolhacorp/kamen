@@ -34,6 +34,22 @@ function validateBody(body: unknown): body is Config {
   if (typeof o.IARA_SYSTEM_PROMPT !== "string") return false;
   if (typeof o.IARA_PRESET_ID !== "string") return false;
   if (typeof o.USE_AVATAR_AEC !== "boolean") return false;
+  if (typeof o.IARA_VAD_ENGINE !== "string") return false;
+  if (typeof o.SILERO_VAD_MODEL !== "string") return false;
+  if (typeof o.IARA_VAD_RMS_THRESHOLD !== "number") return false;
+  if (typeof o.IARA_VAD_HANGOVER_MS !== "number") return false;
+  if (typeof o.IARA_VAD_LISTENING_HOLD_MS !== "number") return false;
+  if (typeof o.IARA_VAD_MIN_SPEECH_MS !== "number") return false;
+  if (typeof o.SILERO_VAD_POSITIVE_SPEECH_THRESHOLD !== "number") return false;
+  if (typeof o.SILERO_VAD_NEGATIVE_SPEECH_THRESHOLD !== "number") return false;
+  if (typeof o.SILERO_VAD_REDEMPTION_MS !== "number") return false;
+  if (typeof o.SILERO_VAD_PRE_SPEECH_PAD_MS !== "number") return false;
+  if (typeof o.IARA_VOICE_API_MIN_BUFFER_MS !== "number") return false;
+  if (typeof o.IARA_WS_MIN_APPEND_MS !== "number") return false;
+  if (typeof o.OPENAI_REALTIME_VAD_THRESHOLD !== "number") return false;
+  if (typeof o.OPENAI_REALTIME_VAD_PREFIX_PADDING_MS !== "number") return false;
+  if (typeof o.OPENAI_REALTIME_VAD_SILENCE_DURATION_MS !== "number")
+    return false;
   return true;
 }
 
