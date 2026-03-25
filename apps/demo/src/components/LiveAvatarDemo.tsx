@@ -130,6 +130,8 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
   >("idle");
   const [micError, setMicError] = useState<string | null>(null);
   const [showLogViewer, setShowLogViewer] = useState(false);
+  /** AEC flag for the active session, from POST /api/session/start (matches saved config at start time). */
+  const [sessionAvatarAecEnabled, setSessionAvatarAecEnabled] = useState(false);
 
   const refreshSummary = useCallback(async () => {
     setSummaryLoading(true);
@@ -138,7 +140,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
       "info",
     );
     try {
-      const res = await fetch("/api/config/summary");
+      const res = await fetch("/api/config/summary", { cache: "no-store" });
       const data = await res.json().catch(() => ({}));
       setSummary(data);
       logOrchestrator("Config summary loaded", "info", {
@@ -198,23 +200,12 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
     }
     setMicStatus("ok");
 
-    if (summary?.error || !summary?.startMode) {
-      const msg =
-        summary?.error ??
-        "Configuration is incomplete. Check Settings (/config).";
-      setError(msg);
-      logOrchestrator("Start aborted: config not ready", "warn", {
-        error: msg,
-      });
-      return;
-    }
-
     setIsLoadingToken(true);
     logOrchestrator(
       "Requesting session token (POST /api/session/start)",
       "info",
       {
-        expectedMode: summary.startMode,
+        expectedModeFromSummary: summary?.startMode ?? null,
       },
     );
 
@@ -225,6 +216,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
         session_token?: string;
         mode?: string;
         error?: string;
+        avatar_aec_enabled?: boolean;
         iara_ws_url?: string;
         iara_api_url?: string;
         iara_system_prompt?: string;
@@ -241,6 +233,11 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
         return;
       }
 
+      const aecFromStart =
+        typeof data.avatar_aec_enabled === "boolean"
+          ? data.avatar_aec_enabled
+          : summary?.avatarAecEnabled === true;
+      setSessionAvatarAecEnabled(aecFromStart);
       setSessionToken(data.session_token ?? "");
       const resolvedMode: SessionMode =
         data.mode === "FULL_PTT" ||
@@ -278,6 +275,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
   const onSessionStopped = useCallback(() => {
     logOrchestrator("Session stopped (user or disconnect)", "info");
     setSessionToken("");
+    setSessionAvatarAecEnabled(false);
   }, []);
 
   const voiceChatConfig = useMemo(() => {
@@ -288,8 +286,7 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
     return true;
   }, [mode]);
 
-  const canStart =
-    summary && summary.startMode && !summary.error && !summaryLoading;
+  const canStart = !summaryLoading;
 
   return (
     <div className="app-container">
@@ -438,7 +435,11 @@ export const LiveAvatarDemo = ({ apiUrl }: { apiUrl: string }) => {
             mode={mode}
             sessionAccessToken={sessionToken}
             voiceChatConfig={voiceChatConfig}
-            aecEnabled={summary?.avatarAecEnabled === true}
+            aecEnabled={
+              sessionToken
+                ? sessionAvatarAecEnabled
+                : summary?.avatarAecEnabled === true
+            }
             onSessionStopped={onSessionStopped}
             iaraWsUrl={mode === "LITE_IARA" ? iaraWsUrl : undefined}
             iaraApiUrl={mode === "LITE_IARA" ? iaraApiUrl : undefined}

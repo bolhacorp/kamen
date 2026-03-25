@@ -291,11 +291,18 @@ export async function POST() {
     session_token: string;
     session_id: string;
     mode: StartMode;
+    /** Same as Settings USE_AVATAR_AEC at the moment the token was issued (client uses for mic AEC). */
+    avatar_aec_enabled: boolean;
     iara_ws_url?: string;
     iara_api_url?: string;
     iara_system_prompt?: string;
     iara_preset_id?: string;
-  } = { session_token, session_id, mode };
+  } = {
+    session_token,
+    session_id,
+    mode,
+    avatar_aec_enabled: config.USE_AVATAR_AEC === true,
+  };
   if (mode === "LITE_IARA") {
     if (iaraWsUrl) body.iara_ws_url = iaraWsUrl;
     if (iaraApiUrl) body.iara_api_url = iaraApiUrl;

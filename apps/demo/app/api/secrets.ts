@@ -34,6 +34,18 @@ const DEFAULTS = {
   USE_AVATAR_AEC: false,
 } as const;
 
+/** Normalize USE_AVATAR_AEC from JSON/env (handles true, "true", 1, etc.). */
+export function normalizeUseAvatarAec(value: unknown): boolean {
+  if (value === true) return true;
+  if (value === false || value == null) return false;
+  if (typeof value === "string") {
+    const t = value.trim().toLowerCase();
+    return t === "true" || t === "1" || t === "yes";
+  }
+  if (typeof value === "number") return value === 1;
+  return false;
+}
+
 export type Config = {
   API_KEY: string;
   API_URL: string;
@@ -239,10 +251,16 @@ export function getConfig(): Config {
     // ignore parse errors; use defaults
   }
 
-  return {
+  const merged = {
     ...DEFAULTS,
     ...fromFile,
     ...fromEnv,
+  };
+  return {
+    ...merged,
+    USE_AVATAR_AEC: normalizeUseAvatarAec(
+      (merged as Record<string, unknown>).USE_AVATAR_AEC,
+    ),
   } as Config;
 }
 

@@ -1,4 +1,4 @@
-import { getConfig } from "../../secrets";
+import { getConfig, normalizeUseAvatarAec } from "../../secrets";
 
 /**
  * GET /api/config/summary
@@ -118,6 +118,6 @@ export async function GET() {
     hasAvatarId: avatarId.length > 0,
     iaraWsUrl: config.USE_IARA ? iaraWsUrl || null : null,
     iaraApiUrl: config.USE_IARA ? iaraApiUrl || null : null,
-    avatarAecEnabled: config.USE_AVATAR_AEC === true,
+    avatarAecEnabled: normalizeUseAvatarAec(config.USE_AVATAR_AEC),
   });
 }
