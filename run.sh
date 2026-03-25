@@ -29,7 +29,7 @@ fi
 
 if ! command -v pnpm &>/dev/null; then
   echo "Error: pnpm is not installed or not in PATH."
-  echo "Run setup first with ./setup&run.sh"
+  echo "Run setup first with ./setupandrun.sh"
   exit 1
 fi
 

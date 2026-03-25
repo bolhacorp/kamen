@@ -15,6 +15,14 @@ type WsLike = {
 
 const DEFAULT_TIMEOUT_MS = 5000;
 
+function closeWs(ws: WsLike | null | undefined) {
+  try {
+    ws?.close();
+  } catch {
+    // ignore
+  }
+}
+
 function resolveIaraVoiceWsUrl(iaraWsUrl: string, iaraApiUrl: string): string {
   const direct = iaraWsUrl.trim();
   if (direct) return direct;
@@ -125,11 +133,7 @@ export async function POST(request: NextRequest) {
       };
 
       const timeout = setTimeout(() => {
-        try {
-          ws?.close();
-        } catch {
-          // ignore
-        }
+        closeWs(ws);
         finish(false, `Timed out after ${DEFAULT_TIMEOUT_MS}ms`);
       }, DEFAULT_TIMEOUT_MS);
 
@@ -162,21 +166,13 @@ export async function POST(request: NextRequest) {
             data?.type === "session_ready"
           ) {
             clearTimeout(timeout);
-            try {
-              ws?.close();
-            } catch {
-              // ignore
-            }
+            closeWs(ws);
             finish(true);
           } else if (data?.type === "error") {
             clearTimeout(timeout);
             const msg = data?.message ?? "Unknown iara error";
             const code = data?.code ? ` (${data.code})` : "";
-            try {
-              ws?.close();
-            } catch {
-              // ignore
-            }
+            closeWs(ws);
             finish(false, `${msg}${code}`);
           }
         } catch {
@@ -232,10 +228,6 @@ export async function POST(request: NextRequest) {
       { status: 200 },
     );
   } finally {
-    try {
-      ws?.close();
-    } catch {
-      // ignore
-    }
+    closeWs(ws);
   }
 }

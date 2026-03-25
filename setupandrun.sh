@@ -11,7 +11,7 @@ for arg in "$@"; do
   case "$arg" in
     --full) FORCE_FULL=true ;;
     -h|--help)
-      echo "Usage: ./setup&run.sh [--full]"
+      echo "Usage: ./setupandrun.sh [--full]"
       echo "  (no args)  Install deps if needed, then start the demo."
       echo "  --full     Run full setup (pnpm install + pnpm build) then start the demo."
       exit 0
