@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import fs from "fs";
 import path from "path";
+import { SANDBOX_AVATAR_ID } from "../../../src/config/sandboxAvatar";
 import { getConfig, getConfigWritePath, type Config } from "../secrets";
 
 function validateBody(body: unknown): body is Config {
@@ -58,6 +59,11 @@ export async function GET() {
   return Response.json(config);
 }
 
+function persistConfig(body: Config): Config {
+  if (!body.IS_SANDBOX) return body;
+  return { ...body, AVATAR_ID: SANDBOX_AVATAR_ID };
+}
+
 export async function POST(request: NextRequest) {
   if (process.env.NODE_ENV === "production") {
     return Response.json(
@@ -86,8 +92,9 @@ export async function POST(request: NextRequest) {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
+    const toWrite = persistConfig(body);
     const tmpPath = `${configPath}.tmp.${Date.now()}`;
-    fs.writeFileSync(tmpPath, JSON.stringify(body, null, 2), "utf-8");
+    fs.writeFileSync(tmpPath, JSON.stringify(toWrite, null, 2), "utf-8");
     fs.renameSync(tmpPath, configPath);
   } catch (err) {
     console.error("Failed to write config:", err);

@@ -1,5 +1,7 @@
 import fs from "fs";
 import path from "path";
+
+import { SANDBOX_AVATAR_ID } from "../../src/config/sandboxAvatar";
 import {
   AUDIO_VAD_DEFAULTS,
   applyAudioVadNormalization,
@@ -9,7 +11,7 @@ import {
 const DEFAULTS = {
   API_KEY: "",
   API_URL: "https://api.liveavatar.com",
-  AVATAR_ID: "",
+  AVATAR_ID: SANDBOX_AVATAR_ID,
   IS_SANDBOX: true,
   VOICE_ID: "",
   CONTEXT_ID: "",
@@ -282,9 +284,13 @@ export function getConfig(): Config {
       (merged as Record<string, unknown>).USE_AVATAR_AEC,
     ),
   };
-  return applyAudioVadNormalization(
+  const vad = applyAudioVadNormalization(
     withAec as Record<string, unknown>,
   ) as Config;
+  if (vad.IS_SANDBOX) {
+    return { ...vad, AVATAR_ID: SANDBOX_AVATAR_ID };
+  }
+  return vad;
 }
 
 /** Path where config is written (for POST /api/config). Resolves to app dir. */

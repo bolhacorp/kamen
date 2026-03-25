@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { avatarIdForSandboxMode } from "../../../../../src/config/sandboxAvatar";
 import { getConfig } from "../../../secrets";
 
 export async function POST(request: NextRequest) {
@@ -23,7 +24,10 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     );
   }
-  const trimmedAvatarId = avatarId?.trim() ?? "";
+  const trimmedAvatarId = avatarIdForSandboxMode(
+    isSandbox,
+    avatarId?.trim() ?? "",
+  );
   if (!trimmedAvatarId) {
     return Response.json(
       {

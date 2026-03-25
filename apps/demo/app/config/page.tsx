@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { SANDBOX_AVATAR_ID } from "../../src/config/sandboxAvatar";
 import { logIara } from "../../src/pipeline-log";
 
 type Config = {
@@ -53,7 +54,7 @@ type Config = {
 const defaultConfig: Config = {
   API_KEY: "",
   API_URL: "https://api.liveavatar.com",
-  AVATAR_ID: "",
+  AVATAR_ID: SANDBOX_AVATAR_ID,
   IS_SANDBOX: true,
   VOICE_ID: "",
   CONTEXT_ID: "",
@@ -252,6 +253,15 @@ export default function ConfigPage() {
   ]);
 
   useEffect(() => {
+    if (!config.IS_SANDBOX) return;
+    setConfig((prev) =>
+      prev.AVATAR_ID === SANDBOX_AVATAR_ID
+        ? prev
+        : { ...prev, AVATAR_ID: SANDBOX_AVATAR_ID },
+    );
+  }, [config.IS_SANDBOX, config.AVATAR_ID]);
+
+  useEffect(() => {
     if (loading || !config.API_KEY?.trim()) return;
     setListsLoading(true);
     const fetches: [
@@ -343,6 +353,7 @@ export default function ConfigPage() {
       }
       setSaveStatus("ok");
       setSaveMessage("Reset to defaults and saved.");
+      await loadConfig();
     } catch (e) {
       setSaveStatus("error");
       setSaveMessage((e as Error).message);
@@ -350,7 +361,13 @@ export default function ConfigPage() {
   };
 
   const update = (key: keyof Config, value: string | boolean | number) => {
-    setConfig((prev) => ({ ...prev, [key]: value }));
+    setConfig((prev) => {
+      if (key === "AVATAR_ID" && prev.IS_SANDBOX) return prev;
+      if (key === "IS_SANDBOX" && value === true) {
+        return { ...prev, IS_SANDBOX: true, AVATAR_ID: SANDBOX_AVATAR_ID };
+      }
+      return { ...prev, [key]: value };
+    });
   };
 
   /** Lite mode = use third-party voice (STT+LLM+TTS). When on, Full mode is off and the third-party section is shown. */
@@ -936,41 +953,55 @@ export default function ConfigPage() {
                 </div>
                 <div>
                   <label className="config-label">Avatar ID</label>
-                  {listsLoading ? (
-                    <p className="text-xs text-gray-500">
-                      Loading avatars from API…
-                    </p>
-                  ) : avatars.length > 0 ? (
-                    <select
-                      value={
-                        avatars.some((a) => a.id === config.AVATAR_ID)
-                          ? config.AVATAR_ID
-                          : "__custom__"
-                      }
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (v !== "__custom__") update("AVATAR_ID", v);
-                      }}
-                      className="config-select"
-                    >
-                      <option value="">— Select avatar —</option>
-                      {avatars.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.name} ({a.id.slice(0, 8)}…)
-                        </option>
-                      ))}
-                      <option value="__custom__">
-                        — Custom UUID (paste below) —
-                      </option>
-                    </select>
-                  ) : null}
-                  <input
-                    type="text"
-                    value={config.AVATAR_ID}
-                    onChange={(e) => update("AVATAR_ID", e.target.value)}
-                    className="config-input mt-1"
-                    placeholder="Or paste Avatar UUID from LiveAvatar dashboard"
-                  />
+                  {config.IS_SANDBOX ? (
+                    <>
+                      <p className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 font-mono text-xs text-gray-200 break-all">
+                        {SANDBOX_AVATAR_ID}
+                      </p>
+                      <p className="config-hint mt-1.5">
+                        Sandbox mode always uses this avatar; it cannot be
+                        changed.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      {listsLoading ? (
+                        <p className="text-xs text-gray-500">
+                          Loading avatars from API…
+                        </p>
+                      ) : avatars.length > 0 ? (
+                        <select
+                          value={
+                            avatars.some((a) => a.id === config.AVATAR_ID)
+                              ? config.AVATAR_ID
+                              : "__custom__"
+                          }
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v !== "__custom__") update("AVATAR_ID", v);
+                          }}
+                          className="config-select"
+                        >
+                          <option value="">— Select avatar —</option>
+                          {avatars.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.name} ({a.id.slice(0, 8)}…)
+                            </option>
+                          ))}
+                          <option value="__custom__">
+                            — Custom UUID (paste below) —
+                          </option>
+                        </select>
+                      ) : null}
+                      <input
+                        type="text"
+                        value={config.AVATAR_ID}
+                        onChange={(e) => update("AVATAR_ID", e.target.value)}
+                        className="config-input mt-1"
+                        placeholder="Or paste Avatar UUID from LiveAvatar dashboard"
+                      />
+                    </>
+                  )}
                 </div>
                 <div>
                   <div className="flex items-center gap-3">

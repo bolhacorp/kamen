@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { avatarIdForSandboxMode } from "../../../../../src/config/sandboxAvatar";
 import { getConfig } from "../../../secrets";
 
 /** Test FULL mode: request a session token with current or provided config. */
@@ -33,7 +34,10 @@ export async function POST(request: NextRequest) {
     // use config
   }
   const trimmedKey = (apiKey ?? "").trim();
-  const trimmedAvatarId = (avatarId ?? "").trim();
+  const trimmedAvatarId = avatarIdForSandboxMode(
+    isSandbox,
+    (avatarId ?? "").trim(),
+  );
   const trimmedVoiceId = (voiceId ?? "").trim();
   const trimmedContextId = (contextId ?? "").trim();
   const lang = (language ?? "").trim() || "en";
