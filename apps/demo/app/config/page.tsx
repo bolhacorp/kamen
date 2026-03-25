@@ -83,7 +83,11 @@ const OPENAI_REALTIME_VOICES = [
 /** Fallback when OpenAI model list cannot be fetched */
 const OPENAI_REALTIME_MODELS_FALLBACK = [
   { value: "gpt-realtime", label: "gpt-realtime" },
-  { value: "gpt-4o-realtime-preview", label: "gpt-4o-realtime-preview" },
+  { value: "gpt-realtime-mini", label: "gpt-realtime-mini" },
+  {
+    value: "gpt-4o-mini-realtime-preview",
+    label: "gpt-4o-mini-realtime-preview",
+  },
 ];
 
 type TestState = "idle" | "testing" | "ok" | "error";

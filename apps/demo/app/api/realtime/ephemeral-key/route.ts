@@ -118,7 +118,7 @@ export async function POST() {
       );
     }
     return Response.json(
-      { value },
+      { value, model: session.model, voice },
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
   } catch (e) {

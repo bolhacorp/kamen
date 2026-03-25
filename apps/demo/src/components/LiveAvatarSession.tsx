@@ -70,6 +70,7 @@ const LiveAvatarSessionComponent: React.FC<{
   const [message, setMessage] = useState("");
   const [realtimeReady, setRealtimeReady] = useState(false);
   const [iaraReady, setIaraReady] = useState(false);
+  const [voiceSetupError, setVoiceSetupError] = useState<string | null>(null);
   const {
     sessionState,
     isStreamReady,
@@ -83,17 +84,28 @@ const LiveAvatarSessionComponent: React.FC<{
   const wsEnabled = process.env.NEXT_PUBLIC_IARA_USE_VOICE_WS !== "false";
   const resolvedIaraVoiceWsUrl = resolveIaraVoiceWsUrl(iaraWsUrl, iaraApiUrl);
 
-  const handleRealtimeReady = React.useCallback(
-    () => setRealtimeReady(true),
-    [],
-  );
+  const handleRealtimeReady = React.useCallback(() => {
+    setVoiceSetupError(null);
+    setRealtimeReady(true);
+  }, []);
   const handleIaraReady = React.useCallback(() => setIaraReady(true), []);
+  const handleRealtimeError = React.useCallback((error: string) => {
+    setRealtimeReady(false);
+    setVoiceSetupError(error);
+  }, []);
+
+  useEffect(() => {
+    setRealtimeReady(false);
+    setIaraReady(false);
+    setVoiceSetupError(null);
+  }, [mode]);
 
   useTrueLiteRealtime(
     mode === "LITE_TRUE",
     sessionRef,
     sessionState,
     handleRealtimeReady,
+    handleRealtimeError,
   );
   useIaraVoiceWs(
     mode === "LITE_IARA" && wsEnabled && !!resolvedIaraVoiceWsUrl,
@@ -246,7 +258,24 @@ const LiveAvatarSessionComponent: React.FC<{
   return (
     <div className="conversation-screen">
       <Header />
-      {voiceConnecting ? (
+      {voiceSetupError ? (
+        <div className="loading-transition px-6">
+          <div className="max-w-md text-center space-y-4">
+            <p className="text-red-300 text-sm">{voiceSetupError}</p>
+            <Button
+              onClick={() => {
+                if (sessionState === SessionState.CONNECTED) {
+                  void stopSession();
+                } else {
+                  onSessionStopped();
+                }
+              }}
+            >
+              Voltar
+            </Button>
+          </div>
+        </div>
+      ) : voiceConnecting ? (
         <div className="loading-transition">
           <Loading />
           <p className="mt-4 text-center text-sm opacity-80">Loading voice…</p>
